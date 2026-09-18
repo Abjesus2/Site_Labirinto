@@ -690,6 +690,11 @@ export const describeHttpError = async (def: ProviderDef, res: Response): Promis
   if (res.status === 404) {
     return new Error(`${def.name}: modelo ou endereço não encontrado (404). Revise o modelo em "Configurar IA". ${detail}`.trim());
   }
+  if (res.status === 503) {
+    return new Error(
+      `${def.name}: o modelo está com alta demanda no momento (503). Já tentei de novo automaticamente sem sucesso — espere um pouco e gere de novo, ou troque de provedor em "Configurar IA".`,
+    );
+  }
   return new Error(`${def.name}: falha ${res.status}. ${detail}`.trim());
 };
 

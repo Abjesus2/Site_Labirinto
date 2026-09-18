@@ -158,6 +158,33 @@ const textToStream = (text: string): ReadableStream<Uint8Array> => {
   });
 };
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * 503 ("model overloaded" / "high demand") é quase sempre passageiro — o
+ * próprio provedor recomenda tentar de novo. Antes disso o app já desistia
+ * dessa tentativa na primeira resposta 503, sem dar chance de a sobrecarga
+ * passar. Duas novas tentativas com espera curta (2s, depois 5s) antes de
+ * seguir para o próximo passo da cadeia (ou desistir). Não se aplica ao modo
+ * gratuito, que já tem sua própria cadeia de alternativas.
+ */
+const fetchWithOverloadRetry = async (
+  url: string,
+  init: RequestInit,
+  isFree: boolean,
+): Promise<Response> => {
+  let res = await fetch(url, init);
+  if (isFree) return res;
+
+  const delaysMs = [2000, 5000];
+  for (const delay of delaysMs) {
+    if (res.status !== 503) break;
+    await sleep(delay);
+    res = await fetch(url, init);
+  }
+  return res;
+};
+
 const generateDiagram = async (body: any, signal?: AbortSignal | null): Promise<Response> => {
   const { def, config } = getActiveProvider();
 
@@ -207,7 +234,7 @@ const generateDiagram = async (body: any, signal?: AbortSignal | null): Promise<
         kindOverride: def.attempts ? attempt.kind : undefined,
       });
 
-      const res = await fetch(req.url, req.init);
+      const res = await fetchWithOverloadRetry(req.url, req.init, def.free);
 
       if (!res.ok) {
         lastError = await describeHttpError(def, res);
