@@ -966,44 +966,23 @@ export function adaptRouteToEndpoints({
     return generateDefaultStepRoute(source, sourceSide, target, targetSide);
   }
 
-  // If source moved, adjust pts[1] to maintain orthogonality with pts[0]
-  const sDir = getSideNormal(sourceSide);
-  if (sDir.x !== 0) {
-    pts[1].y = pts[0].y;
-  } else if (sDir.y !== 0) {
-    pts[1].x = pts[0].x;
-  } else {
-    if (Math.abs(pts[1].x - pts[0].x) <= Math.abs(pts[1].y - pts[0].y)) {
-      pts[1].x = pts[0].x;
-    } else {
-      pts[1].y = pts[0].y;
-    }
-  }
-
-  // If target moved, adjust pts[N-2] to maintain orthogonality with pts[N-1]
-  const tDir = getSideNormal(targetSide);
-  if (tDir.x !== 0) {
-    pts[N - 2].y = pts[N - 1].y;
-  } else if (tDir.y !== 0) {
-    pts[N - 2].x = pts[N - 1].x;
-  } else {
-    if (Math.abs(pts[N - 2].x - pts[N - 1].x) <= Math.abs(pts[N - 2].y - pts[N - 1].y)) {
-      pts[N - 2].x = pts[N - 1].x;
-    } else {
-      pts[N - 2].y = pts[N - 1].y;
-    }
-  }
-
-  // Verify that all segments remain orthogonal. If any is non-orthogonal, regenerate cleanly.
-  for (let i = 0; i < pts.length - 1; i++) {
-    const pA = pts[i];
-    const pB = pts[i + 1];
-    if (Math.abs(pA.x - pB.x) > 0.5 && Math.abs(pA.y - pB.y) > 0.5) {
-      return generateDefaultStepRoute(source, sourceSide, target, targetSide);
-    }
-  }
-
-  return removeRedundantPoints(pts);
+  // Antes, mover o nó de origem ou de destino ajustava só o ponto vizinho à
+  // ponta (pts[1] / pts[N-2]) para casar com a nova posição. Com uma rota de
+  // um único cotovelo (N === 3), pts[1] e pts[N-2] são o MESMO ponto: o ajuste
+  // da origem escrevia nele, e o ajuste do destino sobrescrevia logo em
+  // seguida — quando os dois mexiam na mesma coordenada, o trecho ficava
+  // diagonal e a rota inteira era descartada (generateDefaultStepRoute),
+  // apagando o ajuste manual só por mover uma forma conectada. Em vez de
+  // remendar ponto a ponto e desistir no primeiro trecho torto,
+  // enforceEndpointRouting insere um cotovelo de correção só onde precisa —
+  // o resto da rota desenhada à mão nunca é jogado fora.
+  return enforceEndpointRouting({
+    points: pts,
+    source,
+    sourceSide,
+    target,
+    targetSide,
+  });
 }
 
 export function enforceEndpointRouting({
@@ -1079,6 +1058,53 @@ export function enforceEndpointRouting({
           corner3,
           ...(pts.length > 2 ? pts.slice(2) : [{ ...target }]),
         ];
+      }
+    }
+  }
+
+  const tDir = getSideNormal(targetSide);
+
+  // Check if last segment arrives in the direction of tDir (mirror of the
+  // source check above — sem isso a rota podia ficar ortogonal mas entrar no
+  // destino pelo lado errado depois que o nó de destino se movia).
+  if (tDir.x !== 0 || tDir.y !== 0) {
+    const pLast = pts[pts.length - 1];
+    const pPrev = pts[pts.length - 2];
+
+    let wrongDirection = false;
+    if (tDir.x !== 0) {
+      const dx = pLast.x - pPrev.x;
+      if (dx * tDir.x >= 0 || Math.abs(pLast.y - pPrev.y) > 0.5) {
+        wrongDirection = true;
+      }
+    } else if (tDir.y !== 0) {
+      const dy = pLast.y - pPrev.y;
+      if (dy * tDir.y >= 0 || Math.abs(pLast.x - pPrev.x) > 0.5) {
+        wrongDirection = true;
+      }
+    }
+
+    if (wrongDirection) {
+      const stubPt = {
+        x: pLast.x - tDir.x * stub,
+        y: pLast.y - tDir.y * stub,
+      };
+      const head = pts.length > 2 ? pts.slice(0, pts.length - 2) : [{ ...source }];
+
+      if (tDir.y !== 0) {
+        const sideOffset = (pPrev.x !== pLast.x) ? (pPrev.x - pLast.x) : 40;
+        const corner1 = { x: pLast.x, y: stubPt.y };
+        const corner2 = { x: pLast.x + sideOffset, y: stubPt.y };
+        const corner3 = { x: pLast.x + sideOffset, y: pPrev.y };
+
+        pts = [...head, corner3, corner2, corner1, pLast];
+      } else {
+        const sideOffset = (pPrev.y !== pLast.y) ? (pPrev.y - pLast.y) : 40;
+        const corner1 = { x: stubPt.x, y: pLast.y };
+        const corner2 = { x: stubPt.x, y: pLast.y + sideOffset };
+        const corner3 = { x: pPrev.x, y: pLast.y + sideOffset };
+
+        pts = [...head, corner3, corner2, corner1, pLast];
       }
     }
   }
