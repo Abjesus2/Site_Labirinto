@@ -100,6 +100,7 @@ const buildPrompt = (body: any): string => {
         - If 'decision' is not in the list, use 'process' for branching.
         - Always ensure nodes have valid "type" attribute from this allowed list only.
         - NEVER output custom, invented, or unrecognized types outside this list.
+        - Mesmo que "swimlane" ou "frame" estejam nesta lista, NÃO os utilize para gerar nós — veja a seção 3.2 sobre setores/departamentos.
 
         3. BRANCHING, MERGING & FEEDBACK LOOPS (CRITICAL):
         - Real processes diverge and converge: When a decision node occurs, create distinct paths for different outcomes (e.g. Approved vs Rejected, Success vs Error, Standard vs Escalated).
@@ -114,6 +115,13 @@ const buildPrompt = (body: any): string => {
         - Os rótulos das saídas do mesmo losango precisam ser diferentes entre si e mutuamente exclusivos: juntos devem cobrir todos os desfechos possíveis da pergunta.
         - O texto do losango deve ser uma PERGUNTA fechada, terminando com "?" (ex.: "Documentação está completa?"). Se não der para responder com o par de rótulos escolhido, reescreva a pergunta.
         - Cada saída precisa levar a algum lugar: nenhuma ponta solta. O caminho negativo normalmente volta para a etapa de correção anterior ou segue para um tratamento de exceção.
+
+        3.2. SETORES, ÁREAS OU DEPARTAMENTOS DIFERENTES (RAIAS E QUADROS) — CRITICAL:
+        - Se o processo atravessa mais de um setor, departamento, equipe, sistema ou área física responsável (ex.: "Atendimento" entrega para "Estoque", que entrega para "Financeiro"; ou "Cliente" x "Sistema" x "Equipe Interna"), preencha o campo "department" de CADA nó com o nome curto de quem executa aquela etapa.
+        - "department" precisa ser curto (2 a 4 palavras, ex.: "Vendas", "Financeiro", "Logística", "Cliente", "Sistema Externo") porque o app usa esse texto como título da raia/quadro desenhado ao redor das etapas daquele setor.
+        - Use exatamente o MESMO texto em todas as etapas do mesmo setor — não varie o nome do mesmo grupo (não misture "TI" com "Tecnologia da Informação", por exemplo).
+        - O aplicativo desenha automaticamente a raia ou o quadro ao redor de cada setor identificado, depois de gerar o diagrama. Por isso você NUNCA deve gerar nós do tipo "swimlane" ou "frame" — mesmo que apareçam na lista de formas permitidas, esses dois tipos são reservados para uso manual do usuário depois, não para geração por IA.
+        - Se o processo inteiro acontece dentro de um único setor/departamento/área, deixe "department" vazio ("") em todos os nós — nesse caso nenhuma raia é desenhada.
 
         4. ABSOLUTE TOTAL TIME PRESERVATION (VALUE STREAM INTEGRITY):
         - The GRAND TOTAL SUM of times (duration + setupTime + waitTime) across all nodes in a version MUST BE RIGOROUSLY IDENTICAL for 'simples', 'normal', and 'detalhado'.

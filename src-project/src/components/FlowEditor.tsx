@@ -88,6 +88,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
+import { buildSectorContainers } from '../utils/sectorContainers';
 import { MiroEdgeToolbar } from './MiroEdgeToolbar';
 import { MiroMixedSelectionToolbar } from './MiroMixedSelectionToolbar';
 import { MiroTemplatesModal } from './MiroTemplatesModal';
@@ -2628,7 +2629,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           sanitized.nodes,
           sanitized.edges
         );
-        layoutedGenerated[v] = { nodes: lNodes, edges: lEdges };
+        // Setores/departamentos diferentes preenchidos pela IA ganham uma
+        // raia ou um quadro ao redor, para ficarem visualmente separados.
+        const nodesWithSectors = buildSectorContainers(lNodes, 'TB');
+        layoutedGenerated[v] = { nodes: nodesWithSectors, edges: lEdges };
       });
 
       // Enable timing mode if AI prompt asked for timings or nodes have timing values
