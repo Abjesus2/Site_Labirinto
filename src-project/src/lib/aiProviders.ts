@@ -766,23 +766,24 @@ export interface KeyFile {
   data?: string;
 }
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+export const encoder = new TextEncoder();
+export const decoder = new TextDecoder();
 
-const toB64 = (buf: ArrayBuffer | Uint8Array): string => {
+export const toB64 = (buf: ArrayBuffer | Uint8Array): string => {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   let out = '';
   for (let i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i]);
   return btoa(out);
 };
 
-const fromB64 = (b64: string): Uint8Array =>
+export const fromB64 = (b64: string): Uint8Array =>
   Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 
 export const cryptoAvailable = (): boolean =>
   typeof crypto !== 'undefined' && !!(crypto as any).subtle;
 
-const deriveKey = async (password: string, salt: Uint8Array): Promise<CryptoKey> => {
+/** Também usado por fullBackup.ts para cifrar o backup completo (mesmo esquema PBKDF2+AES-GCM). */
+export const deriveKey = async (password: string, salt: Uint8Array): Promise<CryptoKey> => {
   const base = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, [
     'deriveKey',
   ]);

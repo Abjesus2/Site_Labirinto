@@ -1,12 +1,15 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { openAISettings } from './lib/aiSettingsUI';
 import { getLocalDiagrams, saveLocalDiagram, deleteLocalDiagram, getLocalFolders, saveLocalFolder, deleteLocalFolder } from './lib/storage';
+import { cryptoAvailable } from './lib/aiProviders';
+import { exportFullBackup, parseFullBackup, applyFullBackup } from './lib/fullBackup';
+import { askText, showToast } from './lib/embedCompat';
 import { Diagram, Folder, APP_VERSION } from './types';
 import FlowEditor from './components/FlowEditor';
 import { FlowchartHeroAnimation } from './components/FlowchartHeroAnimation';
 import { SystemManualMenu } from './components/SystemManualMenu';
 import { LandingScreen } from './components/LandingScreen';
-import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode  } from 'lucide-react';
+import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode, Save, Lock, Download, Upload } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { downloadSystemManual } from './utils/systemManual';
 
@@ -32,6 +35,9 @@ export default function App() {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [sortBy, setSortBy] = useState<SortOption>('recent');
   const [isSortDropdownOpen, setIsSortDropdownOpen] = useState(false);
+
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   // Sem login e sem nuvem: os fluxogramas ficam neste navegador e são
   // levados para fora pelo arquivo .json (Exportar / Trazer fluxo).
@@ -128,6 +134,73 @@ export default function App() {
     refreshData();
     setItemToDelete(null);
     setIsDeleting(false);
+  };
+
+  // Sem login e sem nuvem: exportar tudo (fluxogramas + pastas + chaves de
+  // IA) num único arquivo é o único jeito de continuar de onde parou em
+  // outro navegador, outro computador, ou depois de limpar os dados deste.
+  const handleExportFullBackup = async (withPassword: boolean) => {
+    let password: string | undefined;
+    if (withPassword) {
+      const typed = await askText({
+        title: 'Senha do backup',
+        message: 'Escolha uma senha. Ela será pedida na hora de importar. Sem ela, ninguém abre o arquivo — nem você.',
+        placeholder: 'mínimo 6 caracteres',
+      });
+      if (!typed) return;
+      if (typed.length < 6) {
+        showToast({ message: 'Use uma senha com pelo menos 6 caracteres.', tone: 'warn' });
+        return;
+      }
+      password = typed;
+    }
+    try {
+      const content = await exportFullBackup(password);
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.setAttribute('download', `backup-labirinto-${stamp}${password ? '-protegido' : ''}.json`);
+      a.setAttribute('href', url);
+      a.click();
+      showToast({
+        message: password
+          ? 'Backup completo gerado e protegido. Guarde a senha: sem ela o arquivo não abre.'
+          : 'Backup completo gerado. Ele contém suas chaves de IA em texto puro — guarde em local seguro.',
+        tone: password ? 'info' : 'warn',
+        timeout: 14000,
+      });
+    } catch (e: any) {
+      showToast({ message: String(e?.message || e), tone: 'error', timeout: 12000 });
+    }
+  };
+
+  const handleImportFullBackup = async (file: File) => {
+    try {
+      const text = await file.text();
+      let payload;
+      try {
+        payload = await parseFullBackup(text);
+      } catch (e: any) {
+        if (String(e?.message) !== 'SENHA_NECESSARIA') throw e;
+        const password = await askText({
+          title: 'Arquivo protegido',
+          message: 'Informe a senha usada quando este backup foi criado.',
+          placeholder: 'senha do arquivo',
+        });
+        if (!password) return;
+        payload = await parseFullBackup(text, password);
+      }
+      const { diagramsCount, foldersCount } = applyFullBackup(payload);
+      refreshData();
+      setIsBackupModalOpen(false);
+      showToast({
+        message: `Backup restaurado: ${diagramsCount} fluxograma(s) e ${foldersCount} pasta(s). As chaves de IA também foram restauradas.`,
+        timeout: 10000,
+      });
+    } catch (e: any) {
+      showToast({ message: String(e?.message || e), tone: 'error', timeout: 12000 });
+    }
   };
 
   const filteredAndSortedItems = useMemo(() => {
@@ -230,6 +303,14 @@ export default function App() {
             >
               <SearchCode size={16} />
               <span className="hidden sm:inline">Configurar IA</span>
+            </button>
+            <button
+              onClick={() => setIsBackupModalOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-zinc-200 text-zinc-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50 rounded-xl text-xs font-bold transition-all shadow-sm"
+              title="Exportar ou importar tudo: fluxogramas, pastas e chaves de IA"
+            >
+              <Save size={16} />
+              <span className="hidden sm:inline">Backup Completo</span>
             </button>
             <SystemManualMenu />
             
@@ -437,6 +518,78 @@ export default function App() {
                       className="px-4 py-2 font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl"
                     >
                       Excluir
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+
+          {isBackupModalOpen && (
+            <div
+              className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+              onClick={() => setIsBackupModalOpen(false)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-zinc-200"
+              >
+                <div className="p-6">
+                  <h3 className="text-lg font-bold text-zinc-900 mb-2">Backup completo</h3>
+                  <p className="text-sm text-zinc-600 mb-5">
+                    Salva tudo num único arquivo — seus fluxogramas, pastas e as chaves/configurações de IA — para
+                    continuar de onde parou em outro navegador, outro computador, ou depois de limpar os dados deste.
+                  </p>
+
+                  <div className="flex flex-col gap-2 mb-4">
+                    <button
+                      onClick={() => handleExportFullBackup(true)}
+                      disabled={!cryptoAvailable()}
+                      title={!cryptoAvailable() ? 'Indisponível neste contexto: use um endereço https.' : undefined}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-bold text-sm transition-all"
+                    >
+                      <Lock size={15} /> Exportar com senha (recomendado)
+                    </button>
+                    <button
+                      onClick={() => handleExportFullBackup(false)}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-zinc-300 hover:bg-zinc-50 text-zinc-800 rounded-xl font-bold text-sm transition-all"
+                    >
+                      <Download size={15} /> Exportar sem senha
+                    </button>
+                    <button
+                      onClick={() => backupFileInputRef.current?.click()}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-zinc-300 hover:bg-zinc-50 text-zinc-800 rounded-xl font-bold text-sm transition-all"
+                    >
+                      <Upload size={15} /> Importar backup (.json)
+                    </button>
+                    <input
+                      ref={backupFileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) handleImportFullBackup(file);
+                      }}
+                    />
+                  </div>
+
+                  <p className="text-[11px] text-zinc-400 leading-relaxed mb-4">
+                    O arquivo sem senha guarda as chaves de IA em texto puro — trate-o como uma senha seria tratada.
+                    Importar nunca apaga o que já está neste navegador: pastas e fluxogramas do arquivo entram, o
+                    resto continua aqui.
+                  </p>
+
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => setIsBackupModalOpen(false)}
+                      className="px-4 py-2 font-semibold text-zinc-600 hover:bg-zinc-100 rounded-xl"
+                    >
+                      Fechar
                     </button>
                   </div>
                 </div>
