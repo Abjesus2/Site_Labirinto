@@ -668,6 +668,10 @@ export const describeHttpError = async (def: ProviderDef, res: Response): Promis
     }
   }
   detail = String(detail || '').replace(/\s+/g, ' ').slice(0, 140);
+  // O texto do provedor quase sempre vem em inglês (é a resposta bruta da
+  // API dele); registrado no console para quem for depurar, mas não entra
+  // na mensagem mostrada ao usuário — aqui é tudo em português.
+  if (detail) console.warn(`[${def.name}] detalhe do erro ${res.status}: ${detail}`);
 
   if (def.free) {
     const motivo =
@@ -679,7 +683,7 @@ export const describeHttpError = async (def: ProviderDef, res: Response): Promis
     return new Error(`A IA gratuita não respondeu: ${motivo} (erro ${res.status}).`);
   }
   if (res.status === 401 || res.status === 403) {
-    return new Error(`${def.name}: chave recusada (${res.status}). Revise a chave em "Configurar IA". ${detail}`.trim());
+    return new Error(`${def.name}: chave recusada (${res.status}). Revise a chave em "Configurar IA".`);
   }
   if (res.status === 402) {
     return new Error(`${def.name}: conta sem crédito (402). Adicione saldo ou troque de provedor em "Configurar IA".`);
@@ -688,14 +692,14 @@ export const describeHttpError = async (def: ProviderDef, res: Response): Promis
     return new Error(`${def.name}: limite de uso atingido (429). Aguarde alguns minutos ou troque de provedor.`);
   }
   if (res.status === 404) {
-    return new Error(`${def.name}: modelo ou endereço não encontrado (404). Revise o modelo em "Configurar IA". ${detail}`.trim());
+    return new Error(`${def.name}: modelo ou endereço não encontrado (404). Revise o modelo em "Configurar IA".`);
   }
   if (res.status === 503) {
     return new Error(
       `${def.name}: o modelo está com alta demanda no momento (503). Já tentei de novo automaticamente sem sucesso — espere um pouco e gere de novo, ou troque de provedor em "Configurar IA".`,
     );
   }
-  return new Error(`${def.name}: falha ${res.status}. ${detail}`.trim());
+  return new Error(`${def.name}: falha ${res.status}. Veja o console para o detalhe técnico, ou troque de provedor em "Configurar IA".`);
 };
 
 /** Teste rápido de conexão usado pelo botão "Testar" das configurações. */

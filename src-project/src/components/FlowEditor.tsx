@@ -2524,7 +2524,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         })
       });
 
-      if (!response.body) throw new Error('No body in response');
+      if (!response.body) throw new Error('Resposta da IA veio sem conteúdo.');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -2716,10 +2716,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       setTimeout(() => fitView({ padding: 0.2 }), 150);
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        console.log('AI generation aborted');
+        console.log('Geração por IA cancelada');
       } else {
         console.error(err);
-        alert('Erro ao gerar com IA: ' + err.message);
+        // alert() nativo fica mudo em iframe sem allow-modals — o erro
+        // desaparecia em silêncio quando o app estava embutido.
+        showToast({ message: 'Erro ao gerar com IA: ' + err.message, tone: 'error', timeout: 12000 });
       }
     } finally {
       setIsGenerating(false);
