@@ -154,8 +154,11 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   if (draggingHandle && (draggingHandle === 'vert' || draggingHandle === 'horiz') && livePoints) {
     // Active manual segment drag preview
     points = livePoints;
-  } else if (Array.isArray(edgeData.controlPoints) && edgeData.controlPoints.length > 0) {
-    // Frozen / User-defined controlPoints: adapt ONLY endpoints locally without rerouting
+  } else if (edgeData.manualRouting && Array.isArray(edgeData.controlPoints)) {
+    // Frozen / User-defined controlPoints: adapt ONLY endpoints locally without rerouting.
+    // Inclui o caso de controlPoints vazio (o usuário arrastou até a linha virar
+    // uma reta de 2 pontos) — antes isso caía no ramo de baixo e recalculava a
+    // rota automática, fazendo a linha "pular" de volta sozinha.
     const rawPoints = [
       { x: currentSourceX, y: currentSourceY },
       ...edgeData.controlPoints.map((p) => ({ ...p })),
@@ -167,6 +170,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
       sourceSide: sourcePosition,
       target: { x: currentTargetX, y: currentTargetY },
       targetSide: targetPosition,
+      preserveStraightLine: true,
     });
     points = removeCollinearPoints(points);
   } else {
@@ -311,16 +315,19 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
       const dy = Math.abs(p2.y - p1.y);
       const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
 
-      // Trechos muito curtos não ganham alça; o limite era 15px e escondia
-      // controles em rotas compactas.
-      if (len < 8) continue;
+      // Trechos muito curtos não ganham alça. O limite já caiu de 15px para 8px
+      // antes, mas cotos criados logo após um ajuste anterior (perto de um
+      // canto) ainda ficavam abaixo disso e sumiam sem alça nenhuma. Baixado
+      // para 2px: só um segmento praticamente inexistente fica sem controle.
+      const MIN_HANDLE_SEGMENT_LENGTH = 2;
+      if (len < MIN_HANDLE_SEGMENT_LENGTH) continue;
 
       const midX = (p1.x + p2.x) / 2;
       const midY = (p1.y + p2.y) / 2;
 
       // Allow controls for orthogonal segments (vertical or horizontal) using float tolerance
-      const isVert = dx < 2.5 && dy >= 8;
-      const isHoriz = dy < 2.5 && dx >= 8;
+      const isVert = dx < 2.5 && dy >= MIN_HANDLE_SEGMENT_LENGTH;
+      const isHoriz = dy < 2.5 && dx >= MIN_HANDLE_SEGMENT_LENGTH;
 
       if (isVert) {
         segmentControls.push({ index: i, dir: 'vert', midX, midY, length: len });

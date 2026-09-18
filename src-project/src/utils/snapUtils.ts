@@ -930,12 +930,20 @@ export function adaptRouteToEndpoints({
   sourceSide,
   target,
   targetSide,
+  preserveStraightLine = false,
 }: {
   points?: { x: number; y: number }[];
   source: { x: number; y: number };
   sourceSide?: any;
   target: { x: number; y: number };
   targetSide?: any;
+  /**
+   * Quando o usuário arrasta um trecho até a rota virar só 2 pontos (uma reta),
+   * esse resultado precisa ser respeitado como está — não recalculado do zero.
+   * Sem isso, toda vez que o arraste colapsa a rota manual para uma linha reta,
+   * a linha "pula" de volta para a rota automática no próximo render.
+   */
+  preserveStraightLine?: boolean;
 }): { x: number; y: number }[] {
   if (!points || points.length < 2) {
     return generateDefaultStepRoute(source, sourceSide, target, targetSide);
@@ -947,6 +955,14 @@ export function adaptRouteToEndpoints({
   pts[N - 1] = { ...target };
 
   if (N === 2) {
+    if (preserveStraightLine) {
+      const isAligned =
+        Math.abs(pts[0].x - pts[1].x) <= ORTHO_EPSILON ||
+        Math.abs(pts[0].y - pts[1].y) <= ORTHO_EPSILON;
+      if (isAligned) {
+        return pts;
+      }
+    }
     return generateDefaultStepRoute(source, sourceSide, target, targetSide);
   }
 
