@@ -195,3 +195,4 @@ O `tests/app.mjs` executa o **arquivo final `dist/index.html`**, não o código-
 - Nenhuma dependência externa em runtime.
 - Nenhuma janela nativa do navegador.
 - Toda correção de bug ganha verificação automatizada na suíte correspondente.
+- Toda alteração publicada sobe `APP_VERSION` (`src/types.ts`, mostrado no cabeçalho do app) e `version` no `package.json` — assim dá pra saber, só olhando o site, se uma correção específica já chegou lá.

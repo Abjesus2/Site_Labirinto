@@ -2535,8 +2535,36 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         rawGenerated[c] = { nodes: [], edges: [] };
       });
 
+      // Vigia de travamento: se o provedor parar de mandar dados no meio do
+      // streaming sem nunca fechar a conexão, o "await reader.read()" fica
+      // pendurado para sempre — a barra de progresso trava em 100% e o app
+      // nunca sai do estado "Gerando Fluxograma...". 30s sem NENHUM byte novo
+      // cancela sozinho, em vez de exigir que o usuário perceba e clique em
+      // "Cancelar" manualmente.
+      const STALL_TIMEOUT_MS = 30000;
+      const readWithStallGuard = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('STALL_TIMEOUT')), STALL_TIMEOUT_MS);
+          reader.read().then(
+            (result) => { clearTimeout(timer); resolve(result); },
+            (err) => { clearTimeout(timer); reject(err); },
+          );
+        });
+
       while (true) {
-        const { done, value } = await reader.read();
+        let readResult: ReadableStreamReadResult<Uint8Array>;
+        try {
+          readResult = await readWithStallGuard();
+        } catch (e: any) {
+          if (e?.message === 'STALL_TIMEOUT') {
+            aiAbortControllerRef.current?.abort();
+            throw new Error(
+              'A IA parou de responder no meio da geração (sem nenhuma novidade por 30s). Tente novamente ou troque de provedor em "Configurar IA".',
+            );
+          }
+          throw e;
+        }
+        const { done, value } = readResult;
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
