@@ -1,0 +1,36 @@
+{
+  "name": "labirinto-fluxogramas",
+  "private": true,
+  "version": "2.7.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:test-helpers": "esbuild src/lib/labelPlacement.ts --format=esm --outfile=.tmp-labelPlacement.mjs && esbuild src/lib/spreadsheet.ts --format=esm --outfile=.tmp-spreadsheet.mjs && esbuild src/utils/manualEdgeGeometry.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-geom.mjs",
+    "test": "npm run build && npm run build:test-helpers && node tests/app.mjs && node tests/app.mjs --embedded && node tests/labels.mjs && node tests/spreadsheet.mjs && node tests/edges.mjs",
+    "test:app": "node tests/app.mjs",
+    "test:embedded": "node tests/app.mjs --embedded"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.11.3",
+    "dagre": "^0.8.5",
+    "jszip": "^3.10.1",
+    "html-to-image": "^1.11.13",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^0.546.0",
+    "mammoth": "^1.12.2",
+    "motion": "^12.23.24",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/dagre": "^0.7.54",
+    "@vitejs/plugin-react": "^5.0.4",
+    "tailwindcss": "^4.1.14",
+    "vite": "^6.2.3",
+    "vite-plugin-singlefile": "^2.3.0",
+    "jsdom": "^27.0.0",
+    "esbuild": "^0.25.0"
+  }
+}

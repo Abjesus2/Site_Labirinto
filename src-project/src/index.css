@@ -1,0 +1,214 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Draw.io (mxGraph) Edge Selection - Hide raw SVG circles while keeping responsive drag endpoints */
+.react-flow__edgeupdater {
+  display: none !important;
+  opacity: 0 !important;
+  fill: transparent !important;
+  stroke: transparent !important;
+  pointer-events: none !important;
+}
+
+.react-flow__edgeupdater:hover {
+  cursor: grab !important;
+}
+
+.react-flow__edgeupdater:active {
+  cursor: grabbing !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #0066ff !important;
+  stroke-width: 2px !important;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke-width: 2px;
+}
+
+/* Make interaction path easily clickable */
+.react-flow__edge-interaction {
+  stroke-width: 32px !important;
+  cursor: pointer !important;
+}
+
+/* Keyframes for glowing live flow particles */
+@keyframes flowPulse {
+  0% {
+    stroke-dashoffset: 24;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-flow-dash {
+  stroke-dasharray: 6, 6;
+  animation: flowPulse 1.2s linear infinite;
+}
+
+/* Node Resizer & Handle Priority */
+.react-flow__node.selected {
+  z-index: 15;
+}
+
+/* ==========================================
+   NODE RESIZER CONTROLS PRIORITY & ACCESSIBILITY
+   ========================================== */
+.react-flow__resize-control {
+  z-index: 100 !important;
+  pointer-events: auto !important;
+}
+
+.react-flow__resize-control.line {
+  z-index: 99 !important;
+  pointer-events: auto !important;
+}
+
+.react-flow__resize-control.handle {
+  z-index: 101 !important;
+  pointer-events: auto !important;
+}
+
+/* Stable hit-area for NodeResizer handles (18px x 18px) to guarantee grab success over corner handles */
+.react-flow__resize-control.handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  pointer-events: auto !important;
+  z-index: 102 !important;
+}
+
+/* Hide handles by default */
+.react-flow__node .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1 !important;
+}
+
+/* Show handles when hovering over node or when drawing/reconnecting a connection */
+.react-flow__node:hover .react-flow__handle,
+.react-flow.is-connecting .react-flow__node .react-flow__handle,
+body.is-dragging-edge-handle .react-flow__node .react-flow__handle,
+.react-flow__handle-connecting {
+  opacity: 1;
+  pointer-events: all;
+  z-index: 20 !important;
+}
+
+/* When a node is selected, keep corner-adjacent handles accessible but reduce invisible hit-area 
+   so corner resize controls have 100% unhindered access */
+.react-flow__node.selected .react-flow__handle.multi-handle[data-handleid*="-25"]::before,
+.react-flow__node.selected .react-flow__handle.multi-handle[data-handleid*="-75"]::before,
+.react-flow__node.selected .react-flow__handle.multi-handle[id*="-25"]::before,
+.react-flow__node.selected .react-flow__handle.multi-handle[id*="-75"]::before {
+  width: 16px;
+  height: 16px;
+}
+
+/* Cross style handles tightly anchored to borders - 1px mathematical anchor */
+.react-flow__handle.multi-handle {
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+
+  padding: 0 !important;
+  margin: 0 !important;
+
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+
+  overflow: visible !important;
+  cursor: crosshair !important;
+}
+
+/* Área de clique estável no próprio Handle para evitar flickering no hover */
+.react-flow__handle.multi-handle::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: all;
+  background: transparent;
+}
+
+/* Interface visual do Handle - não altera as coordenadas da conexão */
+.connection-handle-ui {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background: transparent;
+  pointer-events: none !important;
+}
+
+/* O + visual */
+.connection-handle-plus {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+  pointer-events: none !important;
+}
+
+.connection-handle-plus::before,
+.connection-handle-plus::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background-color: #3b82f6;
+  transform: translate(-50%, -50%);
+  transition: background-color 0.15s ease;
+  pointer-events: none !important;
+}
+
+.connection-handle-plus::before {
+  width: 12px;
+  height: 3px;
+}
+
+.connection-handle-plus::after {
+  width: 3px;
+  height: 12px;
+}
+
+/* Hover visual translúcido para não esconder a ponta da seta */
+.react-flow__handle.multi-handle:hover .connection-handle-ui {
+  background: rgba(34, 197, 94, 0.2);
+}
+
+.react-flow__handle.multi-handle:hover .connection-handle-plus::before,
+.react-flow__handle.multi-handle:hover .connection-handle-plus::after {
+  background-color: #16a34a;
+}
+
+
+
+

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Labirinto • Editor de Fluxogramas Profissional</title>
+    <meta name="description" content="Editor colaborativo de fluxogramas e diagramas de processos com IA e conexões inteligentes." />
+    <meta property="og:title" content="Labirinto • Editor de Fluxogramas" />
+    <meta property="og:description" content="Editor colaborativo de fluxogramas e diagramas de processos com IA e conexões inteligentes." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <style>
+      html, body, #root { height: 100%; margin: 0; padding: 0; }
+      #open-in-tab {
+        position: fixed; right: 10px; bottom: 10px; z-index: 2147483000;
+        display: none; align-items: center; gap: 8px;
+        font: 500 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: rgba(17, 24, 39, .88); color: #fff; padding: 8px 10px;
+        border-radius: 999px; text-decoration: none; box-shadow: 0 4px 14px rgba(0,0,0,.25);
+      }
+      #open-in-tab:hover { background: rgba(17, 24, 39, 1); }
+      #open-in-tab span.close { opacity: .6; padding-left: 4px; cursor: pointer; }
+    </style>
+    <script>
+      /* ====== CONFIGURACAO OPCIONAL ======================================
+         Para a geracao por IA funcionar sem pedir nada ao usuario, cole
+         abaixo a sua chave do Google Gemini (https://aistudio.google.com/apikey).
+         Em branco: o app pede a chave ao usuario na 1a geracao e guarda no
+         navegador dele. Chave colada aqui fica visivel no codigo-fonte —
+         use apenas chaves restritas por dominio/HTTP referrer.             */
+      window.__GEMINI_API_KEY__ = ""; /* opcional: chave do Gemini pre-configurada */
+
+      /* ====== BLINDAGEM PARA RODAR DENTRO DE IFRAME (Google Sites) ======
+         Em iframes com armazenamento bloqueado o localStorage lanca excecao
+         e derrubaria o app. Aqui trocamos por armazenamento em memoria.    */
+      (function () {
+        function makeMemoryStorage() {
+          var data = {};
+          return {
+            getItem: function (k) { return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+            setItem: function (k, v) { data[k] = String(v); },
+            removeItem: function (k) { delete data[k]; },
+            clear: function () { data = {}; },
+            key: function (i) { return Object.keys(data)[i] || null; },
+            get length() { return Object.keys(data).length; }
+          };
+        }
+        ['localStorage', 'sessionStorage'].forEach(function (name) {
+          var ok = false;
+          try {
+            var s = window[name];
+            s.setItem('__probe__', '1');
+            s.removeItem('__probe__');
+            ok = true;
+          } catch (e) { ok = false; }
+          if (!ok) {
+            try {
+              Object.defineProperty(window, name, { value: makeMemoryStorage(), configurable: true });
+              window.__labirintoStorageFallback = true;
+              console.warn('[Labirinto] ' + name + ' bloqueado neste contexto - usando memoria temporaria.');
+            } catch (e2) { /* navegador nao permite substituir */ }
+          }
+        });
+      })();
+
+      /* Suprime avisos benignos de ResizeObserver ao redimensionar o canvas */
+      window.addEventListener('error', function (e) {
+        if (e && (e.message?.includes('ResizeObserver loop') || e.error?.message?.includes('ResizeObserver loop'))) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+          return true;
+        }
+      }, true);
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <a id="open-in-tab" href="#" target="_blank" rel="noopener">Abrir em tela cheia<span class="close" title="Fechar aviso">✕</span></a>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      /* Atalho "abrir em tela cheia" aparece so quando embutido em iframe:
+         login Google, downloads e impressao funcionam melhor fora do iframe. */
+      (function () {
+        try {
+          if (window.self === window.top) return;
+          var a = document.getElementById('open-in-tab');
+          a.href = window.location.href;
+          a.style.display = 'inline-flex';
+          a.querySelector('.close').addEventListener('click', function (ev) {
+            ev.preventDefault(); ev.stopPropagation(); a.style.display = 'none';
+          });
+        } catch (e) { /* ignore */ }
+      })();
+    </script>
+  </body>
+</html>

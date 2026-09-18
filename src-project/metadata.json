@@ -1,0 +1,6 @@
+{
+  "name": "Labirinto",
+  "description": "Editor profissional e colaborativo de fluxogramas, processos e diagramas com conexões editáveis e IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
