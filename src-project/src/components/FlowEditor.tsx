@@ -88,7 +88,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml } from '../utils/exportFormats';
 import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
 import { buildPrompt as buildManualAIPrompt } from '../lib/aiBrowserBridge';
@@ -644,9 +644,19 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         setShowTimingMode(data.showTimingMode);
       }
 
-      const loadedVersions = data.versions || { normal: { nodes: data.nodes || [], edges: data.edges || [] } };
+      const rawVersions = data.versions || { normal: { nodes: data.nodes || [], edges: data.edges || [] } };
+      // Corrige raias/quadros salvos com o zIndex no lugar errado (ver
+      // normalizeContainerZIndex) — sem isso, diagramas já salvos antes
+      // dessa correção continuariam com as raias na frente para sempre.
+      const loadedVersions: typeof rawVersions = {};
+      Object.keys(rawVersions).forEach((v) => {
+        loadedVersions[v] = {
+          ...rawVersions[v],
+          nodes: normalizeContainerZIndex(rawVersions[v].nodes || []),
+        };
+      });
       const activeV = data.activeVersion || 'normal';
-      
+
       setVersions(loadedVersions);
       setActiveVersion(activeV);
       
@@ -1743,11 +1753,17 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         id: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         type,
         position,
+        // zIndex precisa ser propriedade de topo do nó — o React Flow só lê
+        // dali para decidir a ordem de empilhamento; um zIndex dentro de
+        // "style" é só CSS e não afeta isso, por isso raias/quadros ficavam
+        // na frente mesmo com esse valor -1. Como zIndex negativo continua
+        // funcionando com "elevar nó selecionado" (+1000 por padrão), a raia
+        // some por trás sozinha ao ser deselecionada.
+        zIndex: isContainer ? -1 : undefined,
         style: isContainer
           ? {
               width: type === 'swimlane' ? 800 : 600,
               height: type === 'swimlane' ? 200 : 400,
-              zIndex: -1
             }
           : undefined,
         data: {
@@ -1803,11 +1819,14 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       id: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       type,
       position,
+      // Ver comentário equivalente no onDrop acima: zIndex tem de ser
+      // propriedade de topo do nó, não de "style", para o React Flow
+      // realmente respeitar a ordem de empilhamento.
+      zIndex: isContainer ? -1 : undefined,
       style: isContainer
         ? {
             width: type === 'swimlane' ? 800 : 600,
             height: type === 'swimlane' ? 200 : 400,
-            zIndex: -1
           }
         : undefined,
       data: {
@@ -2488,14 +2507,17 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       appendMode: hasExistingContent,
       allowedShapeTypes,
       files: aiFiles,
+      // O prompt precisa deixar claro pro chat de IA externo que o texto do
+      // usuário (se houver) vem no final — a pessoa pode abrir esse modo sem
+      // escrever nada, só para anexar um arquivo direto no chat.
+      manualMode: true,
     });
   };
 
+  // Abre livremente: diferente do "Gerar com IA" (que exige texto ou anexo
+  // aqui no app), o modo manual serve também para quem vai colar/anexar o
+  // arquivo direto no chat de IA externo, sem usar o anexo deste app.
   const openManualAIModal = () => {
-    if (!deriveFromExisting && !prompt.trim() && aiFiles.length === 0) {
-      showToast({ message: 'Descreva o processo (ou anexe arquivos) antes de gerar o prompt.', tone: 'warn' });
-      return;
-    }
     setShowAIModal(false);
     setManualPasteText('');
     setShowManualAIModal(true);
@@ -4247,9 +4269,8 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             <div className="flex items-center justify-between gap-3 mt-4">
               <button
                 onClick={openManualAIModal}
-                disabled={(!deriveFromExisting && !prompt.trim() && aiFiles.length === 0)}
-                title="Sem chave de IA cadastrada aqui? Copie um prompt pronto para colar em qualquer chat de IA e cole a resposta de volta."
-                className="px-3.5 py-2 text-xs font-semibold text-zinc-600 hover:text-blue-700 hover:bg-blue-50 border border-zinc-200 hover:border-blue-300 rounded-xl transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
+                title="Sem chave de IA cadastrada aqui? Copie um prompt pronto para colar em qualquer chat de IA e cole a resposta de volta. Pode abrir mesmo sem escrever nada aqui, se for só anexar um arquivo direto no chat."
+                className="px-3.5 py-2 text-xs font-semibold text-zinc-600 hover:text-blue-700 hover:bg-blue-50 border border-zinc-200 hover:border-blue-300 rounded-xl transition-colors flex items-center gap-1.5"
               >
                 <ClipboardPaste size={14} />
                 Gerar Manualmente
@@ -4307,6 +4328,11 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               <label className="text-xs font-bold text-zinc-700 uppercase tracking-wider block mb-2">
                 1. Copie este prompt e cole num chat de IA (ChatGPT, Gemini, Claude.ai...)
               </label>
+              <p className="text-[11px] text-zinc-500 mb-2 leading-relaxed">
+                O que você escreveu na Descrição do Processo (se escreveu algo) fica no final deste prompt.
+                Pode não ter nenhum texto ali — nesse caso é só anexar um arquivo direto no chat de IA e
+                pedir para analisar; também pode ter texto e arquivo anexado juntos.
+              </p>
               <textarea
                 readOnly
                 value={buildManualPromptText()}

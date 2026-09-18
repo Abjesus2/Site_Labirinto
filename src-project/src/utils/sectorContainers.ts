@@ -13,6 +13,25 @@ export interface SectorBox {
   maxY: number;
 }
 
+/**
+ * Corrige raias/quadros salvos antes da correção do zIndex (que estava
+ * gravado dentro de "style", onde o React Flow nunca lê para decidir a
+ * ordem de empilhamento — por isso ficavam na frente das formas e das
+ * linhas, atrapalhando a edição). Roda ao carregar qualquer diagrama
+ * salvo, sem precisar o usuário recriar as raias/quadros que já tinha.
+ */
+export function normalizeContainerZIndex(nodes: Node[]): Node[] {
+  return nodes.map((n) => {
+    if (n.type !== 'swimlane' && n.type !== 'frame') return n;
+    if (n.zIndex === -1 && !(n.style as any)?.zIndex) return n;
+
+    const nextStyle = { ...(n.style || {}) };
+    delete (nextStyle as any).zIndex;
+
+    return { ...n, zIndex: -1, style: nextStyle };
+  });
+}
+
 const getSectorNodeBox = (node: Node): { x: number; y: number; width: number; height: number } => {
   const dim = getNodeDimensions(node.type);
   const width = (node.measured?.width as number) || (node.width as number) || (node.style?.width as number) || dim.width;
@@ -106,7 +125,11 @@ export function buildSectorContainers(nodes: Node[], direction: 'TB' | 'LR' = 'T
       id: `sector_${idx}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       type: sequential ? 'swimlane' : 'frame',
       position: { x, y },
-      style: { width, height, zIndex: -1 },
+      // zIndex tem de ser propriedade de topo do nó (não de "style") para o
+      // React Flow respeitar a ordem de empilhamento — só de style é CSS
+      // solto que a lib ignora ao decidir o que fica na frente.
+      zIndex: -1,
+      style: { width, height },
       data: {
         label: b.dept,
         styleOverride: {},

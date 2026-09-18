@@ -33,7 +33,7 @@ const ENDPOINT_PATH = '/api/generate-diagram';
  * texto e cola num chat de IA qualquer, em vez de cadastrar uma chave aqui).
  */
 export const buildPrompt = (body: any): string => {
-  const { prompt, complexities, existingVersions, appendMode, allowedShapeTypes, files } = body || {};
+  const { prompt, complexities, existingVersions, appendMode, allowedShapeTypes, files, manualMode } = body || {};
 
   const compList = (complexities || ['normal']).join(', ');
   const allowedList =
@@ -43,7 +43,25 @@ export const buildPrompt = (body: any): string => {
   const allowedStr = allowedList.map((t: string) => `"${t}"`).join(', ');
 
   let contextStr = '';
-  if (prompt && files && files.length > 0) {
+  if (manualMode) {
+    // Modo "Gerar Manualmente com Outra IA": este prompt é copiado e colado
+    // num chat de IA qualquer. O app não sabe, no momento em que o prompt é
+    // gerado, se a pessoa vai anexar um arquivo DIRETO naquele chat (sem
+    // passar pelo app) — por isso o aviso abaixo cobre os três casos
+    // possíveis em vez de assumir que "sem texto" significa "sem nada".
+    contextStr =
+      `CONTENT LOCATION NOTE: whatever the user wrote, if anything, is at the very end of this ` +
+      `prompt, right after this note, under "User content:". There may be NO text at all there — ` +
+      `in that case, the ONLY source of information is a file attached directly to this chat message, ` +
+      `and you must analyze that file. There may also be BOTH a text description AND one or more ` +
+      `attached files together — in that case use everything available (the text below plus any file ` +
+      `attached to this message) to build the flowchart. Never refuse or ask for more input just because ` +
+      `the text below is empty — check for an attached file first.\n\n`;
+    contextStr += prompt ? `User content: ${prompt}` : `User content: (nenhum texto — veja o arquivo anexado a esta conversa, se houver)`;
+    if (files && files.length > 0) {
+      contextStr += `\n\nThe user also attached ${files.length} file(s) to this app before generating this prompt (they should attach the same file(s) directly here too). Analyze the text above together with any attached file(s).`;
+    }
+  } else if (prompt && files && files.length > 0) {
     contextStr = `User Prompt & Attached Files: ${prompt}\n\nIMPORTANT: The user has attached files alongside this prompt. You MUST analyze BOTH the text prompt and the file contents together. They complement each other to form the final flowchart.`;
   } else if (prompt) {
     contextStr = `User Prompt: ${prompt}`;
