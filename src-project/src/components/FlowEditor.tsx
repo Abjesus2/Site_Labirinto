@@ -89,6 +89,9 @@ import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
 import { buildSectorContainers } from '../utils/sectorContainers';
+import { generateDrawioXml, generateBpmnXml } from '../utils/exportFormats';
+import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
+import { buildPrompt as buildManualAIPrompt } from '../lib/aiBrowserBridge';
 import { MiroEdgeToolbar } from './MiroEdgeToolbar';
 import { MiroMixedSelectionToolbar } from './MiroMixedSelectionToolbar';
 import { MiroTemplatesModal } from './MiroTemplatesModal';
@@ -97,7 +100,7 @@ import { FlowDataTable } from './FlowDataTable';
 import { TimingModal } from './TimingModal';
 import { SaveModal } from './SaveModal';
 import { ShareModal } from './ShareModal';
-import { showToast } from '../lib/embedCompat';
+import { showToast, copyText } from '../lib/embedCompat';
 import { openAISettings } from '../lib/aiSettingsUI';
 import { getActiveSummary } from '../lib/aiProviders';
 import { ImportFlowModal } from './ImportFlowModal';
@@ -414,39 +417,6 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction: 'TB' | 'LR
   return { nodes: positionedNodes, edges: optimizedEdges };
 };
 
-const generateDrawio = (nodes: Node[], edges: Edge[]) => {
-  let xml = `<?xml version="1.0" encoding="UTF-8"?><mxfile><diagram name="Diagrama" id="diagram-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>`;
-  nodes.forEach(n => {
-    const isDecision = n.type === 'decision';
-    const style = isDecision ? 'rhombus;whiteSpace=wrap;html=1;' : 'rounded=1;whiteSpace=wrap;html=1;';
-    xml += `<mxCell id="${n.id}" value="${((n.data.label as string) || '').replace(/"/g, "'")}" vertex="1" parent="1" style="${style}"><mxGeometry x="${n.position.x}" y="${n.position.y}" width="140" height="70" as="geometry"/></mxCell>`;
-  });
-  edges.forEach(e => {
-    xml += `<mxCell id="${e.id}" edge="1" parent="1" source="${e.source}" target="${e.target}" value="${((e.label as string) || '').replace(/"/g, "'")}"><mxGeometry relative="1" as="geometry"/></mxCell>`;
-  });
-  xml += `</root></mxGraphModel></diagram></mxfile>`;
-  return xml;
-};
-
-const generateBpmn = (nodes: Node[], edges: Edge[]) => {
-  let xml = `<?xml version="1.0" encoding="UTF-8"?><bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn"><bpmn:process id="Process_1" isExecutable="false">`;
-  nodes.forEach(n => {
-    if (n.type === 'start') {
-      xml += `<bpmn:startEvent id="${n.id}" name="${n.data.label}"/>`;
-    } else if (n.type === 'decision') {
-      xml += `<bpmn:exclusiveGateway id="${n.id}" name="${n.data.label}"/>`;
-    } else if (n.type === 'end') {
-      xml += `<bpmn:endEvent id="${n.id}" name="${n.data.label}"/>`;
-    } else {
-      xml += `<bpmn:task id="${n.id}" name="${n.data.label}"/>`;
-    }
-  });
-  edges.forEach(e => {
-    xml += `<bpmn:sequenceFlow id="${e.id}" sourceRef="${e.source}" targetRef="${e.target}" name="${e.label || ''}" />`;
-  });
-  xml += `</bpmn:process></bpmn:definitions>`;
-  return xml;
-};
 
 function sanitizeForFirestore(data: any): any {
   if (data === undefined) return null;
@@ -625,6 +595,14 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const [showAIConflictModal, setShowAIConflictModal] = useState<boolean>(false);
   const [aiConflictChoice, setAiConflictChoice] = useState<'new_version' | 'replace' | 'append'>('new_version');
   const [newVersionCustomName, setNewVersionCustomName] = useState<string>('');
+
+  // Gerar Manualmente com Outra IA: mostra o prompt pronto para copiar em
+  // qualquer chat de IA (sem precisar cadastrar chave aqui) e lê de volta o
+  // que a IA respondeu. pendingManualPasteRef diz ao modal de conflito
+  // (reaproveitado dos dois fluxos) qual função terminar a geração ao confirmar.
+  const [showManualAIModal, setShowManualAIModal] = useState<boolean>(false);
+  const [manualPasteText, setManualPasteText] = useState<string>('');
+  const pendingManualPasteRef = useRef<boolean>(false);
 
   // Versions
   const [activeVersion, setActiveVersion] = useState<string>('normal');
@@ -2493,6 +2471,210 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     executeGenerateAI({ mode: 'replace' });
   };
 
+  // Gerar Manualmente com Outra IA — sem cadastrar nenhuma chave aqui: monta
+  // o mesmo prompt que a API receberia e mostra pronto para copiar em
+  // qualquer chat de IA (ChatGPT, Gemini, Claude.ai...). O usuário anexa lá
+  // os mesmos arquivos, se houver, e cola a resposta de volta.
+  const buildManualPromptText = (): string => {
+    const versionsWithContent = selectedComplexities.filter(c => (versions[c]?.nodes?.length || 0) > 0);
+    const hasExistingContent = versionsWithContent.length > 0 || nodes.length > 0;
+    return buildManualAIPrompt({
+      prompt: deriveFromExisting ? '' : prompt,
+      complexities: selectedComplexities,
+      existingVersions: deriveFromExisting ? { [sourceVersion]: versions[sourceVersion] } : undefined,
+      // Instrui a IA a usar IDs únicos sempre que já existe conteúdo — vale
+      // tanto para "Adicionar ao lado" quanto para os outros modos (nesse
+      // ponto ainda não sabemos qual o usuário vai escolher depois de colar).
+      appendMode: hasExistingContent,
+      allowedShapeTypes,
+      files: aiFiles,
+    });
+  };
+
+  const openManualAIModal = () => {
+    if (!deriveFromExisting && !prompt.trim() && aiFiles.length === 0) {
+      showToast({ message: 'Descreva o processo (ou anexe arquivos) antes de gerar o prompt.', tone: 'warn' });
+      return;
+    }
+    setShowAIModal(false);
+    setManualPasteText('');
+    setShowManualAIModal(true);
+  };
+
+  const handleManualPasteGenerate = () => {
+    if (!manualPasteText.trim()) {
+      showToast({ message: 'Cole aqui o texto que a IA respondeu antes de gerar.', tone: 'warn' });
+      return;
+    }
+
+    const versionsWithContent = selectedComplexities.filter(c => (versions[c]?.nodes?.length || 0) > 0);
+    const canvasHasContent = nodes.length > 0;
+
+    if (versionsWithContent.length > 0 || canvasHasContent) {
+      const baseName = selectedComplexities.length === 1 ? selectedComplexities[0] : activeVersion;
+      let counter = 2;
+      let candidate = `${baseName} (v${counter})`;
+      while (versions[candidate] || versions[`${baseName}_v${counter}`]) {
+        counter++;
+        candidate = `${baseName} (v${counter})`;
+      }
+      setNewVersionCustomName(candidate);
+      setAiConflictChoice('new_version');
+      pendingManualPasteRef.current = true;
+      setShowManualAIModal(false);
+      setShowAIConflictModal(true);
+      return;
+    }
+
+    executeManualPasteImport({ mode: 'replace' });
+  };
+
+  const executeManualPasteImport = (options: {
+    mode: 'replace' | 'new_version' | 'append';
+    newVersionName?: string;
+  }) => {
+    const { mode, newVersionName } = options;
+    const { rawGenerated, nodeCount } = parseGeneratedBlock(
+      manualPasteText,
+      selectedComplexities,
+      allowedShapeTypes,
+      AI_SHAPE_FALLBACK_MAP,
+    );
+
+    if (nodeCount === 0) {
+      showToast({
+        message: 'Não encontrei nenhuma etapa válida no texto colado. Confira se copiou a resposta da IA por completo, sem cortar nada.',
+        tone: 'error',
+        timeout: 12000,
+      });
+      setShowAIConflictModal(false);
+      setShowManualAIModal(true);
+      return;
+    }
+
+    setShowAIConflictModal(false);
+    setShowManualAIModal(false);
+    finalizeGeneratedContent(rawGenerated, mode, newVersionName);
+    setManualPasteText('');
+    showToast({ message: 'Fluxograma gerado a partir do texto colado.', timeout: 6000 });
+  };
+
+  // Termina a geração (streaming pela API ou texto colado manualmente):
+  // sanitiza a conectividade, aplica o layout automático, desenha raias/
+  // quadros por setor e mescla no mapa de versões conforme o modo escolhido.
+  // Extraído para função própria porque o modo "Gerar Manualmente" (texto
+  // colado de outro chat de IA) chega no mesmo ponto sem passar pelo
+  // streaming — as duas vias precisam terminar exatamente da mesma forma.
+  const finalizeGeneratedContent = (
+    rawGenerated: Record<string, { nodes: Node[]; edges: Edge[] }>,
+    mode: 'replace' | 'new_version' | 'append',
+    newVersionName?: string,
+  ) => {
+    const promptLower = prompt.toLowerCase();
+    const hasTimingPrompt = /tempo|minuto|hora|dia|duração|duracao|setup|espera|lead time|pausa|prazo/.test(promptLower);
+
+    const layoutedGenerated: Record<string, { nodes: Node[], edges: Edge[] }> = {};
+    let anyTimingGenerated = false;
+
+    Object.keys(rawGenerated).forEach(v => {
+      const sanitized = ensureConnectedGraph(
+        rawGenerated[v].nodes,
+        rawGenerated[v].edges
+      );
+
+      if (sanitized.nodes.some(n => {
+        const t = (n.data as any)?.timing;
+        return (t?.duration || 0) > 0 || (t?.setupTime || 0) > 0;
+      })) {
+        anyTimingGenerated = true;
+      }
+
+      const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
+        sanitized.nodes,
+        sanitized.edges
+      );
+      const nodesWithSectors = buildSectorContainers(lNodes, 'TB');
+      layoutedGenerated[v] = { nodes: nodesWithSectors, edges: lEdges };
+    });
+
+    const shouldEnableTiming = hasTimingPrompt || anyTimingGenerated;
+    setShowTimingMode(shouldEnableTiming);
+
+    const updatedVersions: Record<string, { nodes: Node[], edges: Edge[], viewport?: any }> = { ...versions };
+
+    if (updatedVersions[activeVersion]) {
+      updatedVersions[activeVersion] = {
+        ...updatedVersions[activeVersion],
+        nodes,
+        edges,
+        viewport: getViewport()
+      };
+    }
+
+    let newActiveVersionKey = activeVersion;
+
+    if (mode === 'new_version') {
+      const cleanName = (newVersionName || '').trim() || `${activeVersion} (v2)`;
+      if (selectedComplexities.length === 1) {
+        const comp = selectedComplexities[0];
+        updatedVersions[cleanName] = {
+          nodes: layoutedGenerated[comp]?.nodes || [],
+          edges: layoutedGenerated[comp]?.edges || []
+        };
+        newActiveVersionKey = cleanName;
+      } else {
+        selectedComplexities.forEach(c => {
+          const vKey = `${cleanName} - ${c}`;
+          updatedVersions[vKey] = {
+            nodes: layoutedGenerated[c]?.nodes || [],
+            edges: layoutedGenerated[c]?.edges || []
+          };
+        });
+        const primeComp = selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0];
+        newActiveVersionKey = `${cleanName} - ${primeComp}`;
+      }
+    } else if (mode === 'append') {
+      selectedComplexities.forEach(c => {
+        const prevN = updatedVersions[c]?.nodes || [];
+        const prevE = updatedVersions[c]?.edges || [];
+        const genN = layoutedGenerated[c]?.nodes || [];
+        const genE = layoutedGenerated[c]?.edges || [];
+
+        const maxX = prevN.reduce((max, n) => Math.max(max, n.position.x + 260), 0);
+        const shiftedNodes = genN.map(n => ({
+          ...n,
+          position: { x: n.position.x + maxX + 120, y: n.position.y }
+        }));
+
+        updatedVersions[c] = {
+          nodes: [...prevN, ...shiftedNodes],
+          edges: [...prevE, ...genE]
+        };
+      });
+      newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
+    } else {
+      // mode === 'replace'
+      selectedComplexities.forEach(c => {
+        updatedVersions[c] = {
+          nodes: layoutedGenerated[c]?.nodes || [],
+          edges: layoutedGenerated[c]?.edges || []
+        };
+      });
+      newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
+    }
+
+    setVersions(updatedVersions);
+    setActiveVersion(newActiveVersionKey);
+    const activeData = updatedVersions[newActiveVersionKey] || { nodes: [], edges: [] };
+    setNodes(activeData.nodes);
+    setEdges(activeData.edges);
+
+    pushHistory(activeData.nodes, activeData.edges);
+    saveToCloud(newActiveVersionKey, activeData.nodes, activeData.edges, updatedVersions, shouldEnableTiming);
+
+    setTimeout(() => fitView({ padding: 0.2 }), 150);
+  };
+
   // AI Diagram Generation Execution
   const executeGenerateAI = async (options: {
     mode: 'replace' | 'new_version' | 'append';
@@ -2505,7 +2687,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setShowAIModal(false);
     setIsGenerating(true);
     setProgress(10);
-    
+
     aiAbortControllerRef.current = new AbortController();
 
     try {
@@ -2572,176 +2754,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const data = JSON.parse(line);
-            if (data.progress) {
-              setProgress(data.progress);
-            }
-            if (data.version && rawGenerated[data.version]) {
-              if (data.node) {
-                const requestedType = data.node.type;
-                let safeType = validateGeneratedNodeType(requestedType);
-                if (!safeType) {
-                  const mapped = AI_SHAPE_FALLBACK_MAP(requestedType, allowedShapeTypes);
-                  console.warn(`AI generated unavailable shape "${requestedType}" → mapped to "${mapped}"`);
-                  safeType = mapped;
-                }
-                const nodeDuration = data.node.duration !== undefined ? Number(data.node.duration) : (safeType === 'start' || safeType === 'end' ? 0 : 10);
-                rawGenerated[data.version].nodes.push({
-                  id: data.node.id,
-                  type: safeType,
-                  position: { x: 0, y: 0 },
-                  data: {
-                    label: data.node.label,
-                    timing: {
-                      duration: nodeDuration,
-                      setupTime: Number(data.node.setupTime) || 0,
-                      waitTime: Number(data.node.waitTime) || 0,
-                      pauseTime: Number(data.node.pauseTime) || 0,
-                      otherExtraTime: Number(data.node.otherExtraTime) || 0,
-                      department: data.node.department || '',
-                      status: 'pending',
-                    },
-                    styleOverride: safeType === 'start' ? { backgroundColor: '#dcfce7', borderColor: '#22c55e' } :
-                                   safeType === 'end' ? { backgroundColor: '#fee2e2', borderColor: '#ef4444' } :
-                                   safeType === 'decision' ? { backgroundColor: '#fef9c3', borderColor: '#eab308' } :
-                                   safeType === 'document' ? { backgroundColor: '#fdf4ff', borderColor: '#c084fc' } :
-                                   safeType === 'database' ? { backgroundColor: '#ecfdf5', borderColor: '#10b981' } :
-                                   safeType === 'inputoutput' ? { backgroundColor: '#f0fdfa', borderColor: '#14b8a6' } :
-                                   { backgroundColor: '#eff6ff', borderColor: '#3b82f6' }
-                  }
-                });
-              }
-              if (data.edge) {
-                const isDubious = !!data.edge.isDubious;
-                rawGenerated[data.version].edges.push({
-                  id: data.edge.id || `e_${data.edge.source}_${data.edge.target}_${Math.random().toString(36).substring(2, 7)}`,
-                  source: data.edge.source,
-                  target: data.edge.target,
-                  label: data.edge.label || (isDubious ? 'Analise Conexão' : ''),
-                  type: 'smoothstep',
-                  markerEnd: { type: MarkerType.ArrowClosed, color: isDubious ? '#ef4444' : '#0f172a' },
-                  style: { stroke: isDubious ? '#ef4444' : '#0f172a', strokeWidth: isDubious ? 3 : 2 },
-                  data: { isDubious }
-                });
-              }
-            }
-          } catch (e) {}
+          const lineProgress = applyGeneratedJsonlLine(line, rawGenerated, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
+          if (lineProgress !== null) setProgress(lineProgress);
         }
       }
 
-      // Check if user prompt requested timing information explicitly
-      const promptLower = prompt.toLowerCase();
-      const hasTimingPrompt = /tempo|minuto|hora|dia|duração|duracao|setup|espera|lead time|pausa|prazo/.test(promptLower);
-
-      // Apply graph sanitizer & dagre auto-layout to all generated versions
-      const layoutedGenerated: Record<string, { nodes: Node[], edges: Edge[] }> = {};
-      let anyTimingGenerated = false;
-
-      Object.keys(rawGenerated).forEach(v => {
-        // Sanitize connectivity first to guarantee every node has at least 1 input & 1 output edge
-        const sanitized = ensureConnectedGraph(
-          rawGenerated[v].nodes,
-          rawGenerated[v].edges
-        );
-
-        if (sanitized.nodes.some(n => {
-          const t = (n.data as any)?.timing;
-          return (t?.duration || 0) > 0 || (t?.setupTime || 0) > 0;
-        })) {
-          anyTimingGenerated = true;
-        }
-
-        const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
-          sanitized.nodes,
-          sanitized.edges
-        );
-        // Setores/departamentos diferentes preenchidos pela IA ganham uma
-        // raia ou um quadro ao redor, para ficarem visualmente separados.
-        const nodesWithSectors = buildSectorContainers(lNodes, 'TB');
-        layoutedGenerated[v] = { nodes: nodesWithSectors, edges: lEdges };
-      });
-
-      // Enable timing mode if AI prompt asked for timings or nodes have timing values
-      const shouldEnableTiming = hasTimingPrompt || anyTimingGenerated;
-      setShowTimingMode(shouldEnableTiming);
-
-      // Merge into versions map based on user decision mode
-      const updatedVersions: Record<string, { nodes: Node[], edges: Edge[], viewport?: any }> = { ...versions };
-      
-      // Preserve current viewport and unsaved state
-      if (updatedVersions[activeVersion]) {
-        updatedVersions[activeVersion] = {
-          ...updatedVersions[activeVersion],
-          nodes,
-          edges,
-          viewport: getViewport()
-        };
-      }
-
-      let newActiveVersionKey = activeVersion;
-
-      if (mode === 'new_version') {
-        const cleanName = (newVersionName || '').trim() || `${activeVersion} (v2)`;
-        if (selectedComplexities.length === 1) {
-          const comp = selectedComplexities[0];
-          updatedVersions[cleanName] = {
-            nodes: layoutedGenerated[comp]?.nodes || [],
-            edges: layoutedGenerated[comp]?.edges || []
-          };
-          newActiveVersionKey = cleanName;
-        } else {
-          selectedComplexities.forEach(c => {
-            const vKey = `${cleanName} - ${c}`;
-            updatedVersions[vKey] = {
-              nodes: layoutedGenerated[c]?.nodes || [],
-              edges: layoutedGenerated[c]?.edges || []
-            };
-          });
-          const primeComp = selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0];
-          newActiveVersionKey = `${cleanName} - ${primeComp}`;
-        }
-      } else if (mode === 'append') {
-        selectedComplexities.forEach(c => {
-          const prevN = updatedVersions[c]?.nodes || [];
-          const prevE = updatedVersions[c]?.edges || [];
-          const genN = layoutedGenerated[c]?.nodes || [];
-          const genE = layoutedGenerated[c]?.edges || [];
-          
-          const maxX = prevN.reduce((max, n) => Math.max(max, n.position.x + 260), 0);
-          const shiftedNodes = genN.map(n => ({
-            ...n,
-            position: { x: n.position.x + maxX + 120, y: n.position.y }
-          }));
-
-          updatedVersions[c] = {
-            nodes: [...prevN, ...shiftedNodes],
-            edges: [...prevE, ...genE]
-          };
-        });
-        newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
-      } else {
-        // mode === 'replace'
-        selectedComplexities.forEach(c => {
-          updatedVersions[c] = {
-            nodes: layoutedGenerated[c]?.nodes || [],
-            edges: layoutedGenerated[c]?.edges || []
-          };
-        });
-        newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
-      }
-
-      setVersions(updatedVersions);
-      setActiveVersion(newActiveVersionKey);
-      const activeData = updatedVersions[newActiveVersionKey] || { nodes: [], edges: [] };
-      setNodes(activeData.nodes);
-      setEdges(activeData.edges);
-
-      pushHistory(activeData.nodes, activeData.edges);
-      saveToCloud(newActiveVersionKey, activeData.nodes, activeData.edges, updatedVersions, shouldEnableTiming);
-
-      setTimeout(() => fitView({ padding: 0.2 }), 150);
+      finalizeGeneratedContent(rawGenerated, mode, newVersionName);
     } catch (err: any) {
       if (err.name === 'AbortError') {
         console.log('Geração por IA cancelada');
@@ -2893,7 +2911,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
   };
 
   const exportDrawio = () => {
-    const xml = generateDrawio(nodes, edges);
+    const xml = generateDrawioXml(nodes, edges);
     const blob = new Blob([xml], { type: 'application/xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2903,7 +2921,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
   };
 
   const exportBpmn = () => {
-    const xml = generateBpmn(nodes, edges);
+    const xml = generateBpmnXml(nodes, edges);
     const blob = new Blob([xml], { type: 'application/xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -4226,20 +4244,123 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-3 mt-4">
+            <div className="flex items-center justify-between gap-3 mt-4">
               <button
-                onClick={requestCloseAIModal}
+                onClick={openManualAIModal}
+                disabled={(!deriveFromExisting && !prompt.trim() && aiFiles.length === 0)}
+                title="Sem chave de IA cadastrada aqui? Copie um prompt pronto para colar em qualquer chat de IA e cole a resposta de volta."
+                className="px-3.5 py-2 text-xs font-semibold text-zinc-600 hover:text-blue-700 hover:bg-blue-50 border border-zinc-200 hover:border-blue-300 rounded-xl transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:pointer-events-none"
+              >
+                <ClipboardPaste size={14} />
+                Gerar Manualmente
+              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={requestCloseAIModal}
+                  className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-xl transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleAIGenerateClick}
+                  disabled={(!deriveFromExisting && !prompt.trim() && aiFiles.length === 0)}
+                  className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <Sparkles size={16} />
+                  Gerar com IA
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GERAR MANUALMENTE COM OUTRA IA — sem cadastrar chave aqui */}
+      {showManualAIModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+          onClick={() => { setShowManualAIModal(false); setShowAIModal(true); }}
+        >
+          <div
+            className="bg-white rounded-3xl shadow-2xl w-full max-w-xl max-h-[92vh] overflow-y-auto p-5 sm:p-6 border border-zinc-200 animate-in fade-in zoom-in-95 duration-150 custom-scrollbar"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-zinc-700 to-zinc-900 flex items-center justify-center text-white shadow-md">
+                  <ClipboardPaste size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-zinc-900">Gerar Manualmente com Outra IA</h3>
+                  <p className="text-xs text-zinc-500">Sem cadastrar chave nenhuma aqui — use qualquer chat de IA que você já tenha.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowManualAIModal(false); setShowAIModal(true); }}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mb-5">
+              <label className="text-xs font-bold text-zinc-700 uppercase tracking-wider block mb-2">
+                1. Copie este prompt e cole num chat de IA (ChatGPT, Gemini, Claude.ai...)
+              </label>
+              <textarea
+                readOnly
+                value={buildManualPromptText()}
+                onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                className="w-full h-40 p-3 text-[11px] font-mono leading-relaxed border border-zinc-200 rounded-2xl outline-none resize-none bg-zinc-50 text-zinc-700 custom-scrollbar"
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await copyText(buildManualPromptText());
+                    if (ok) showToast({ message: 'Prompt copiado. Cole num chat de IA.', timeout: 5000 });
+                  }}
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white flex items-center gap-1.5 transition-colors"
+                >
+                  <Copy size={13} /> Copiar Prompt
+                </button>
+                {aiFiles.length > 0 && (
+                  <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                    Anexe também no chat: {aiFiles.map(f => f.name).join(', ')}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="mb-5">
+              <label className="text-xs font-bold text-zinc-700 uppercase tracking-wider block mb-2">
+                2. Cole aqui a resposta que a IA devolveu
+              </label>
+              <textarea
+                value={manualPasteText}
+                onChange={(e) => setManualPasteText(e.target.value)}
+                placeholder={'{"progress": 10}\n{"version": "normal", "node": {...}}\n...'}
+                className="w-full h-40 p-3 text-[11px] font-mono leading-relaxed border border-zinc-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none resize-none bg-white"
+              />
+              <p className="text-[11px] text-zinc-400 mt-1.5 leading-relaxed">
+                Pode colar exatamente como a IA respondeu, com ``` de bloco de código ou algum texto explicando antes/depois — o app ignora tudo que não for uma linha de dado válida.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => { setShowManualAIModal(false); setShowAIModal(true); }}
                 className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-xl transition-colors"
               >
-                Cancelar
+                Voltar
               </button>
               <button
-                onClick={handleAIGenerateClick}
-                disabled={(!deriveFromExisting && !prompt.trim() && aiFiles.length === 0)}
-                className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 text-white text-sm font-semibold rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer"
+                onClick={handleManualPasteGenerate}
+                disabled={!manualPasteText.trim()}
+                className="px-5 py-2.5 bg-gradient-to-r from-zinc-800 to-zinc-950 hover:from-zinc-900 hover:to-black disabled:opacity-50 text-white text-sm font-semibold rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer"
               >
                 <Sparkles size={16} />
-                Gerar com IA
+                Gerar Fluxograma
               </button>
             </div>
           </div>
@@ -4378,17 +4499,33 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             <div className="flex items-center justify-end gap-2.5">
               <button
                 type="button"
-                onClick={() => setShowAIConflictModal(false)}
+                onClick={() => {
+                  setShowAIConflictModal(false);
+                  if (pendingManualPasteRef.current) {
+                    pendingManualPasteRef.current = false;
+                    setShowManualAIModal(true);
+                  }
+                }}
                 className="px-4 py-2 text-xs font-semibold text-zinc-600 hover:bg-zinc-100 rounded-xl transition-colors cursor-pointer"
               >
                 Voltar ao Assistente
               </button>
               <button
                 type="button"
-                onClick={() => executeGenerateAI({
-                  mode: aiConflictChoice,
-                  newVersionName: newVersionCustomName
-                })}
+                onClick={() => {
+                  if (pendingManualPasteRef.current) {
+                    pendingManualPasteRef.current = false;
+                    executeManualPasteImport({
+                      mode: aiConflictChoice,
+                      newVersionName: newVersionCustomName
+                    });
+                  } else {
+                    executeGenerateAI({
+                      mode: aiConflictChoice,
+                      newVersionName: newVersionCustomName
+                    });
+                  }
+                }}
                 className={`px-5 py-2.5 text-xs font-bold rounded-xl text-white shadow-md transition-all flex items-center gap-2 cursor-pointer ${
                   aiConflictChoice === 'replace'
                     ? 'bg-red-600 hover:bg-red-700'

@@ -27,8 +27,12 @@ import {
 
 const ENDPOINT_PATH = '/api/generate-diagram';
 
-/** Prompt idêntico ao que o servidor Express montava. */
-const buildPrompt = (body: any): string => {
+/**
+ * Prompt idêntico ao que o servidor Express montava. Exportado porque também
+ * alimenta o modo "Gerar Manualmente com Outra IA" (o usuário copia este
+ * texto e cola num chat de IA qualquer, em vez de cadastrar uma chave aqui).
+ */
+export const buildPrompt = (body: any): string => {
   const { prompt, complexities, existingVersions, appendMode, allowedShapeTypes, files } = body || {};
 
   const compList = (complexities || ['normal']).join(', ');
