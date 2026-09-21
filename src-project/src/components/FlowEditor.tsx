@@ -88,7 +88,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers, normalizeContainerZIndex } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml } from '../utils/exportFormats';
 import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
 import { buildPrompt as buildManualAIPrompt } from '../lib/aiBrowserBridge';
@@ -1755,11 +1755,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         position,
         // zIndex precisa ser propriedade de topo do nó — o React Flow só lê
         // dali para decidir a ordem de empilhamento; um zIndex dentro de
-        // "style" é só CSS e não afeta isso, por isso raias/quadros ficavam
-        // na frente mesmo com esse valor -1. Como zIndex negativo continua
+        // "style" é só CSS e não afeta isso. CONTAINER_BASE_Z_INDEX (-100)
+        // fica abaixo até das arestas padrão (-1), não só dos nós — ver
+        // comentário em sectorContainers.ts. Como zIndex negativo continua
         // funcionando com "elevar nó selecionado" (+1000 por padrão), a raia
         // some por trás sozinha ao ser deselecionada.
-        zIndex: isContainer ? -1 : undefined,
+        zIndex: isContainer ? CONTAINER_BASE_Z_INDEX : undefined,
         style: isContainer
           ? {
               width: type === 'swimlane' ? 800 : 600,
@@ -1822,7 +1823,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       // Ver comentário equivalente no onDrop acima: zIndex tem de ser
       // propriedade de topo do nó, não de "style", para o React Flow
       // realmente respeitar a ordem de empilhamento.
-      zIndex: isContainer ? -1 : undefined,
+      zIndex: isContainer ? CONTAINER_BASE_Z_INDEX : undefined,
       style: isContainer
         ? {
             width: type === 'swimlane' ? 800 : 600,

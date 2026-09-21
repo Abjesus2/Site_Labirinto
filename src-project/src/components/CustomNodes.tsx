@@ -943,8 +943,8 @@ export const FrameNode = ({ id, data, type, selected }: any) => {
         handleClassName="w-3.5 h-3.5 bg-white border-2 border-blue-600 rounded-sm shadow-md z-50 hover:scale-125 transition-transform cursor-pointer"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
-      <div 
-        className="absolute -top-7 left-0 px-3 py-1 bg-zinc-800 text-white rounded-md text-xs font-semibold shadow-md flex items-center gap-1.5 select-none z-10"
+      <div
+        className="absolute top-2 left-2 right-2 px-3 py-1 bg-zinc-800 text-white rounded-md text-xs font-semibold shadow-md flex items-center gap-1.5 select-none z-10 max-w-[calc(100%-1rem)]"
         style={{
           backgroundColor: data.styleOverride?.headerBg || undefined,
           color: data.styleOverride?.headerColor || undefined
@@ -952,8 +952,8 @@ export const FrameNode = ({ id, data, type, selected }: any) => {
       >
         <EditableNodeLabel nodeId={id} label={data.label} placeholder="Quadro / Frame de Apresentação" />
       </div>
-      
-      <div className="w-full h-full p-3" />
+
+      <div className="w-full h-full p-3 pt-9" />
     </div>
   );
 };
