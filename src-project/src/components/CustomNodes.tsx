@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { NodeTiming } from '../types';
 import { formatDuration } from '../utils/timingUtils';
+import { useNavigationMode } from '../lib/navigationMode';
 
 // Quick Add connector button component - Disabled to prevent flashing unwanted dots
 const QuickAddButtons = (_: { nodeId: string; isSelected?: boolean }) => {
@@ -127,16 +128,17 @@ export const EditableNodeLabel = ({
   const [isEditing, setIsEditing] = useState(false);
   const [text, setText] = useState(label || '');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const isNavigationMode = useNavigationMode();
 
   useEffect(() => {
     setText(label || '');
   }, [label]);
 
   useEffect(() => {
-    if (isEditingManual) {
+    if (isEditingManual && !isNavigationMode) {
       setIsEditing(true);
     }
-  }, [isEditingManual]);
+  }, [isEditingManual, isNavigationMode]);
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -205,12 +207,13 @@ export const EditableNodeLabel = ({
   return (
     <div
       onDoubleClick={(e) => {
+        if (isNavigationMode) return;
         e.stopPropagation();
         setIsEditing(true);
       }}
-      className={`select-none cursor-text break-words w-full ${className}`}
+      className={`select-none w-full break-words ${isNavigationMode ? '' : 'cursor-text'} ${className}`}
       style={mergedStyle}
-      title="Clique duas vezes para editar o texto"
+      title={isNavigationMode ? undefined : 'Clique duas vezes para editar o texto'}
     >
       {text || <span className="opacity-40 italic">{placeholder}</span>}
     </div>

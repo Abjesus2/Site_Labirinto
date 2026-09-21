@@ -30,7 +30,8 @@ import {
   PlusCircle,
   MessageSquare,
   Boxes,
-  X
+  X,
+  Eye
 } from 'lucide-react';
 
 interface MiroToolbarProps {
@@ -38,8 +39,11 @@ interface MiroToolbarProps {
   setToolMode: (mode: 'select' | 'pan') => void;
   onAddNode: (type: string, initialData?: Record<string, any>) => void;
   onAddFreeEdge?: () => void;
+  isPlacingFreeEdge?: boolean;
   onOpenTemplates: () => void;
   onOpenAI: () => void;
+  isNavigationMode: boolean;
+  setIsNavigationMode: (value: boolean) => void;
 }
 
 const STICKY_COLORS = [
@@ -58,8 +62,11 @@ export const MiroToolbar: React.FC<MiroToolbarProps> = ({
   setToolMode,
   onAddNode,
   onAddFreeEdge,
+  isPlacingFreeEdge,
   onOpenTemplates,
-  onOpenAI
+  onOpenAI,
+  isNavigationMode,
+  setIsNavigationMode
 }) => {
   const [activeFlyout, setActiveFlyout] = useState<'shapes' | 'sticky' | 'frames' | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -128,92 +135,114 @@ export const MiroToolbar: React.FC<MiroToolbarProps> = ({
           <Hand size={18} />
         </button>
 
-        <div className="w-full h-px bg-zinc-200 my-1" />
-
-        {/* Templates */}
+        {/* Modo Navegação: trava toda edição/seleção — só sobra pan/zoom
+            para avaliar o conteúdo sem risco de mexer em nada. */}
         <button
-          onClick={() => { onOpenTemplates(); setActiveFlyout(null); }}
-          className="p-2.5 rounded-xl text-zinc-600 hover:bg-amber-50 hover:text-amber-700 transition-all group cursor-pointer"
-          title="Modelos de Fluxograma"
+          onClick={() => { setIsNavigationMode(!isNavigationMode); setActiveFlyout(null); }}
+          className={`p-2.5 rounded-xl transition-all cursor-pointer ${
+            isNavigationMode
+              ? 'bg-emerald-600 text-white shadow-md'
+              : 'text-zinc-600 hover:bg-emerald-50 hover:text-emerald-700'
+          }`}
+          title={isNavigationMode ? 'Sair do Modo Navegação' : 'Modo Navegação (somente visualizar, sem editar)'}
         >
-          <LayoutTemplate size={18} className="group-hover:scale-110 transition-transform" />
+          <Eye size={18} />
         </button>
 
-        {/* Text Tool */}
-        <button
-          onClick={() => {
-            onAddNode('text', { label: 'Novo Texto' });
-            setActiveFlyout(null);
-          }}
-          className="p-2.5 rounded-xl text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-all cursor-pointer"
-          title="Inserir Texto (T)"
-        >
-          <Type size={18} />
-        </button>
+        {!isNavigationMode && (
+          <>
+            <div className="w-full h-px bg-zinc-200 my-1" />
 
-        {/* Free Connector / Arrow Line */}
-        {onAddFreeEdge && (
-          <button
-            onClick={() => {
-              onAddFreeEdge();
-              setActiveFlyout(null);
-            }}
-            className="p-2.5 rounded-xl text-zinc-600 hover:bg-blue-50 hover:text-blue-700 transition-all cursor-pointer"
-            title="Adicionar Seta / Linha Independente"
-          >
-            <Spline size={18} />
-          </button>
+            {/* Templates */}
+            <button
+              onClick={() => { onOpenTemplates(); setActiveFlyout(null); }}
+              className="p-2.5 rounded-xl text-zinc-600 hover:bg-amber-50 hover:text-amber-700 transition-all group cursor-pointer"
+              title="Modelos de Fluxograma"
+            >
+              <LayoutTemplate size={18} className="group-hover:scale-110 transition-transform" />
+            </button>
+
+            {/* Text Tool */}
+            <button
+              onClick={() => {
+                onAddNode('text', { label: 'Novo Texto' });
+                setActiveFlyout(null);
+              }}
+              className="p-2.5 rounded-xl text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-all cursor-pointer"
+              title="Inserir Texto (T)"
+            >
+              <Type size={18} />
+            </button>
+
+            {/* Free Connector / Arrow Line */}
+            {onAddFreeEdge && (
+              <button
+                onClick={() => {
+                  onAddFreeEdge();
+                  setActiveFlyout(null);
+                }}
+                className={`p-2.5 rounded-xl transition-all cursor-pointer ${
+                  isPlacingFreeEdge
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'text-zinc-600 hover:bg-blue-50 hover:text-blue-700'
+                }`}
+                title={isPlacingFreeEdge ? 'Clique no canvas para posicionar a linha (Esc cancela)' : 'Adicionar Seta / Linha Independente'}
+              >
+                <Spline size={18} />
+              </button>
+            )}
+
+            {/* Sticky Notes Flyout */}
+            <div className="relative">
+              <button
+                onClick={() => toggleFlyout('sticky')}
+                className={`p-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeFlyout === 'sticky' ? 'bg-yellow-100 text-yellow-800' : 'text-zinc-600 hover:bg-yellow-50 hover:text-yellow-700'
+                }`}
+                title="Notas Adesivas (Sticky Notes)"
+              >
+                <StickyNote size={18} />
+              </button>
+            </div>
+
+            {/* Shapes Library Flyout */}
+            <div className="relative">
+              <button
+                onClick={() => toggleFlyout('shapes')}
+                className={`p-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeFlyout === 'shapes' ? 'bg-blue-100 text-blue-800' : 'text-zinc-600 hover:bg-blue-50 hover:text-blue-700'
+                }`}
+                title="Biblioteca de Formas de Fluxograma"
+              >
+                <Square size={18} />
+              </button>
+            </div>
+
+            {/* Swimlanes & Frames Flyout */}
+            <div className="relative">
+              <button
+                onClick={() => toggleFlyout('frames')}
+                className={`p-2.5 rounded-xl transition-all cursor-pointer ${
+                  activeFlyout === 'frames' ? 'bg-purple-100 text-purple-800' : 'text-zinc-600 hover:bg-purple-50 hover:text-purple-700'
+                }`}
+                title="Raias (Swimlanes) e Quadros"
+              >
+                <Columns size={18} />
+              </button>
+            </div>
+
+            <div className="w-full h-px bg-zinc-200 my-1" />
+
+            {/* AI Generator Button */}
+            <button
+              onClick={() => { onOpenAI(); setActiveFlyout(null); }}
+              className="p-2.5 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-md hover:shadow-lg hover:scale-105 transition-all group cursor-pointer"
+              title="Assistente IA - Geração de Fluxos"
+            >
+              <Sparkles size={18} className="group-hover:rotate-12 transition-transform" />
+            </button>
+          </>
         )}
-
-        {/* Sticky Notes Flyout */}
-        <div className="relative">
-          <button
-            onClick={() => toggleFlyout('sticky')}
-            className={`p-2.5 rounded-xl transition-all cursor-pointer ${
-              activeFlyout === 'sticky' ? 'bg-yellow-100 text-yellow-800' : 'text-zinc-600 hover:bg-yellow-50 hover:text-yellow-700'
-            }`}
-            title="Notas Adesivas (Sticky Notes)"
-          >
-            <StickyNote size={18} />
-          </button>
-        </div>
-
-        {/* Shapes Library Flyout */}
-        <div className="relative">
-          <button
-            onClick={() => toggleFlyout('shapes')}
-            className={`p-2.5 rounded-xl transition-all cursor-pointer ${
-              activeFlyout === 'shapes' ? 'bg-blue-100 text-blue-800' : 'text-zinc-600 hover:bg-blue-50 hover:text-blue-700'
-            }`}
-            title="Biblioteca de Formas de Fluxograma"
-          >
-            <Square size={18} />
-          </button>
-        </div>
-
-        {/* Swimlanes & Frames Flyout */}
-        <div className="relative">
-          <button
-            onClick={() => toggleFlyout('frames')}
-            className={`p-2.5 rounded-xl transition-all cursor-pointer ${
-              activeFlyout === 'frames' ? 'bg-purple-100 text-purple-800' : 'text-zinc-600 hover:bg-purple-50 hover:text-purple-700'
-            }`}
-            title="Raias (Swimlanes) e Quadros"
-          >
-            <Columns size={18} />
-          </button>
-        </div>
-
-        <div className="w-full h-px bg-zinc-200 my-1" />
-
-        {/* AI Generator Button */}
-        <button
-          onClick={() => { onOpenAI(); setActiveFlyout(null); }}
-          className="p-2.5 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-md hover:shadow-lg hover:scale-105 transition-all group cursor-pointer"
-          title="Assistente IA - Geração de Fluxos"
-        >
-          <Sparkles size={18} className="group-hover:rotate-12 transition-transform" />
-        </button>
       </aside>
 
       {/* Backdrop for closing active flyout on mobile and desktop */}

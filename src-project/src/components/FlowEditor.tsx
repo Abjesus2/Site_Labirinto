@@ -81,7 +81,8 @@ import {
   CopyPlus,
   GitBranch,
   RotateCcw,
-  PlusCircle
+  PlusCircle,
+  Spline
 } from 'lucide-react';
 
 import { customNodeTypes, getNodeDimensions, pickBoxStyle } from './CustomNodes';
@@ -91,6 +92,7 @@ import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
 import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
+import { NavigationModeContext } from '../lib/navigationMode';
 import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
 import { buildPrompt as buildManualAIPrompt } from '../lib/aiBrowserBridge';
 import { MiroEdgeToolbar } from './MiroEdgeToolbar';
@@ -164,6 +166,19 @@ const AI_SHAPE_FALLBACK_MAP = (requestedType: string, allowed: string[]): string
     return pick('circle');
   return 'process';
 };
+
+// Cursor customizado (ícone de seta) mostrado enquanto o usuário escolhe
+// onde a próxima seta/linha independente vai nascer — ver isPlacingFreeEdge.
+// Um ícone SVG embutido como data URI, com contorno branco para ficar
+// visível em qualquer fundo do canvas; o hotspot (onde o clique realmente
+// acontece) fica na ponta da seta.
+const FREE_EDGE_CURSOR_SVG = `<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'>
+  <line x1='6' y1='22' x2='20' y2='8' stroke='white' stroke-width='5' stroke-linecap='round'/>
+  <polygon points='20,4 25,9 15,9' fill='white'/>
+  <line x1='6' y1='22' x2='20' y2='8' stroke='#0f172a' stroke-width='2.5' stroke-linecap='round'/>
+  <polygon points='20,6 23,9 17,9' fill='#0f172a'/>
+</svg>`;
+const FREE_EDGE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(FREE_EDGE_CURSOR_SVG)}") 6 22, crosshair`;
 
 const recomputeEdgeRoutingForNodes = (edges: Edge[], nodes: Node[], movedNodeIds: Set<string>): Edge[] => {
   if (movedNodeIds.size === 0) return edges;
@@ -453,6 +468,13 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   
   // Tool Modes & Floating Toolbars
   const [toolMode, setToolMode] = useState<'select' | 'pan'>('select');
+  // Modo Navegação: fluxograma vira somente pan/zoom, sem nenhuma edição
+  // ou seleção — para revisar o conteúdo sem risco de mexer em nada.
+  const [isNavigationMode, setIsNavigationMode] = useState(false);
+  // Modo de posicionamento da seta/linha independente: fica true entre o
+  // clique no botão da barra lateral e o clique no canvas que escolhe
+  // onde a linha nasce.
+  const [isPlacingFreeEdge, setIsPlacingFreeEdge] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
   const [minimapSize, setMinimapSize] = useState<'sm' | 'md' | 'lg'>('sm');
@@ -960,6 +982,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
   // Listen for global custom events from node components
   useEffect(() => {
+    // Modo Navegação: não registra nenhum destes listeners — qualquer
+    // evento disparado por um botão de edição num nó/linha (rótulo,
+    // tempos, alinhar, travar, redimensionar, etc.) simplesmente não tem
+    // quem escute e não faz nada.
+    if (isNavigationMode) return;
+
     const handleUpdateLabel = (e: any) => {
       const { nodeId, label } = e.detail;
       updateNodeLabel(nodeId, label);
@@ -1400,12 +1428,18 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       window.removeEventListener('flow-reconnect-edge', handleReconnectEdgeEvent);
       window.removeEventListener('flow-update-edge-data', handleUpdateEdgeDataEvent);
     };
-  }, [nodes, edges, activeVersion, pushHistory, saveToCloud]);
+  }, [nodes, edges, activeVersion, pushHistory, saveToCloud, isNavigationMode]);
 
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      // Modo Navegação: nada que edite o fluxo — só os atalhos de
+      // navegação pura (trocar ferramenta, ajustar zoom, Escape) continuam.
+      if (isNavigationMode && (e.key === 'Delete' || e.key === 'Backspace' || (e.ctrlKey || e.metaKey))) {
         return;
       }
 
@@ -1440,6 +1474,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         setShowAIModal(false);
         setShowExportMenu(false);
         setSelectedEdge(null);
+        setIsPlacingFreeEdge(false);
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         const target = e.target as HTMLElement;
         if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) {
@@ -1452,7 +1487,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo, nodes, selectedEdge, fitView, performIndependentDelete]);
+  }, [handleUndo, handleRedo, nodes, selectedEdge, fitView, performIndependentDelete, isNavigationMode]);
 
   // Version Switcher
   useEffect(() => {
@@ -1622,6 +1657,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, [nodes, activeVersion, pushHistory, saveToCloud]);
 
   const onEdgeClick = useCallback((e: React.MouseEvent, edge: Edge) => {
+    // elementsSelectable=false já impede o React Flow de selecionar por
+    // conta própria, mas esse callback ainda é chamado de qualquer jeito
+    // — sem essa guarda, o app selecionava a linha "por fora" mesmo assim.
+    if (isNavigationMode) return;
     const isMultiKey = e.ctrlKey || e.metaKey || e.shiftKey;
     setReconnectingEndpoint(null);
 
@@ -1639,7 +1678,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       setEdges((eds) => eds.map((eg) => ({ ...eg, selected: eg.id === edge.id })));
       setSelectedEdge(edge);
     }
-  }, []);
+  }, [isNavigationMode]);
 
   const onReconnectStart = useCallback(() => {
     edgeReconnectSuccessful.current = false;
@@ -1673,6 +1712,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, []);
 
   const onNodeClick = useCallback((e: React.MouseEvent, clickedNode: Node) => {
+    if (isNavigationMode) return;
     const isMultiKey = e.ctrlKey || e.metaKey || e.shiftKey;
     if (!isMultiKey) {
       setEdges((eds) => eds.map((eg) => ({ ...eg, selected: false })));
@@ -1717,9 +1757,73 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     // adiciona/remove este nó do multi-select ao processar o clique
     // internamente — alternar "selected" de novo aqui cancelava esse
     // toggle interno (ver comentário equivalente em onEdgeClick).
-  }, [selectedEdge, reconnectingEndpoint, nodes, activeVersion, pushHistory, saveToCloud]);
+  }, [selectedEdge, reconnectingEndpoint, nodes, activeVersion, pushHistory, saveToCloud, isNavigationMode]);
 
-  const onPaneClick = useCallback(() => {
+  // Adiciona uma seta/linha independente (dois pontos de junção ligados por
+  // uma aresta, sem forma nenhuma) centrada em "centerPos" — em coordenadas
+  // do fluxo. Sem esse parâmetro, cai no centro da tela atual (usado só
+  // como um fallback razoável; o fluxo normal sempre passa a posição
+  // escolhida pelo clique no canvas, ver isPlacingFreeEdge/onPaneClick).
+  const handleAddFreeEdge = useCallback((centerPos?: { x: number; y: number }) => {
+    let centerX: number;
+    let centerY: number;
+    if (centerPos) {
+      centerX = centerPos.x;
+      centerY = centerPos.y;
+    } else {
+      const vp = getViewport();
+      centerX = -vp.x / vp.zoom + (window.innerWidth / 2) / vp.zoom;
+      centerY = -vp.y / vp.zoom + (window.innerHeight / 2) / vp.zoom;
+    }
+
+    const pt1Id = `pt_src_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const pt2Id = `pt_tgt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    const pt1: Node = {
+      id: pt1Id,
+      type: 'junction',
+      position: { x: centerX - 120, y: centerY },
+      data: { label: '' },
+      selected: false
+    };
+
+    const pt2: Node = {
+      id: pt2Id,
+      type: 'junction',
+      position: { x: centerX + 120, y: centerY },
+      data: { label: '' },
+      selected: false
+    };
+
+    const freeEdge: Edge = {
+      id: `free_edge_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      source: pt1Id,
+      target: pt2Id,
+      sourceHandle: 'center',
+      targetHandle: 'center',
+      type: 'smoothstep',
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#0f172a' },
+      style: { stroke: '#0f172a', strokeWidth: 2 },
+      selected: true
+    };
+
+    const nextNodes = nodes.concat([pt1, pt2]);
+    const nextEdges = edges.concat(freeEdge);
+
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setSelectedEdge(freeEdge);
+    pushHistory(nextNodes, nextEdges, 'Adicionou linha independente');
+    saveToCloud(activeVersion, nextNodes, nextEdges);
+  }, [nodes, edges, getViewport, activeVersion, pushHistory, saveToCloud]);
+
+  const onPaneClick = useCallback((e: React.MouseEvent) => {
+    if (isPlacingFreeEdge) {
+      const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      handleAddFreeEdge(pos);
+      setIsPlacingFreeEdge(false);
+      return;
+    }
     setSelectedEdge(null);
     setReconnectingEndpoint(null);
     setShowExportMenu(false);
@@ -1728,7 +1832,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setShowTimeSettingsMenu(false);
     setNodes((nds) => nds.map((n) => ({ ...n, selected: false })));
     setEdges((eds) => eds.map((e) => ({ ...e, selected: false })));
-  }, []);
+  }, [isPlacingFreeEdge, screenToFlowPosition, handleAddFreeEdge]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -2089,9 +2193,11 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         e.preventDefault();
         handleCopyFlow();
       } else if (key === 'x') {
+        if (isNavigationMode) return; // recortar remove do fluxo — bloqueado em modo navegação
         e.preventDefault();
         handleCutFlow();
       } else if (key === 'v') {
+        if (isNavigationMode) return;
         // Sem preventDefault: é o evento "paste" que traz o conteúdo do
         // sistema sem exigir permissão. Se ele não vier (contexto restrito),
         // cai para o recorte guardado pelo próprio app.
@@ -2103,6 +2209,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     };
 
     const onPaste = (e: ClipboardEvent) => {
+      if (isNavigationMode) return;
       if (emCampoDeTexto(e.target as HTMLElement)) return;
       const clip = readFlowClipFromEvent(e);
       if (clip) {
@@ -2118,7 +2225,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('paste', onPaste as any);
     };
-  }, [handleCopyFlow, handleCutFlow, handlePasteFlow, applyIncomingFlow]);
+  }, [handleCopyFlow, handleCutFlow, handlePasteFlow, applyIncomingFlow, isNavigationMode]);
 
   const handleDuplicateNode = (nodeToDup: Node) => {
     const newId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -2164,52 +2271,6 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, [performIndependentDelete]);
 
   // Add Free Floating Line (Independent from shapes)
-  const handleAddFreeEdge = useCallback(() => {
-    const vp = getViewport();
-    const centerX = -vp.x / vp.zoom + (window.innerWidth / 2) / vp.zoom;
-    const centerY = -vp.y / vp.zoom + (window.innerHeight / 2) / vp.zoom;
-
-    const pt1Id = `pt_src_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const pt2Id = `pt_tgt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-    const pt1: Node = {
-      id: pt1Id,
-      type: 'junction',
-      position: { x: centerX - 120, y: centerY },
-      data: { label: '' },
-      selected: false
-    };
-
-    const pt2: Node = {
-      id: pt2Id,
-      type: 'junction',
-      position: { x: centerX + 120, y: centerY },
-      data: { label: '' },
-      selected: false
-    };
-
-    const freeEdge: Edge = {
-      id: `free_edge_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      source: pt1Id,
-      target: pt2Id,
-      sourceHandle: 'center',
-      targetHandle: 'center',
-      type: 'smoothstep',
-      markerEnd: { type: MarkerType.ArrowClosed, color: '#0f172a' },
-      style: { stroke: '#0f172a', strokeWidth: 2 },
-      selected: true
-    };
-
-    const nextNodes = nodes.concat([pt1, pt2]);
-    const nextEdges = edges.concat(freeEdge);
-
-    setNodes(nextNodes);
-    setEdges(nextEdges);
-    setSelectedEdge(freeEdge);
-    pushHistory(nextNodes, nextEdges, 'Adicionou linha independente');
-    saveToCloud(activeVersion, nextNodes, nextEdges);
-  }, [nodes, edges, getViewport, activeVersion, pushHistory, saveToCloud]);
-
   // Edge Property Updaters
   const updateEdge = (id: string, updates: Partial<Edge>) => {
     const nextEdges = edges.map(e => e.id === id ? { ...e, ...updates } : e);
@@ -3134,6 +3195,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
   }, [currentlySelectedNode, flowToScreenPosition]);
 
   return (
+    <NavigationModeContext.Provider value={isNavigationMode}>
     <div className="h-screen w-full flex flex-col bg-zinc-100 font-sans select-none overflow-hidden">
       {/* MIRO TOP NAVIGATION HEADER */}
       <header className="relative z-50 min-h-[52px] h-auto py-1.5 px-3 bg-white border-b border-zinc-200 flex flex-wrap items-center justify-between gap-2 shadow-xs flex-shrink-0">
@@ -3669,11 +3731,43 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             toolMode={toolMode}
             setToolMode={setToolMode}
             onAddNode={handleAddNode}
-            onAddFreeEdge={handleAddFreeEdge}
+            onAddFreeEdge={() => setIsPlacingFreeEdge(true)}
+            isPlacingFreeEdge={isPlacingFreeEdge}
             onOpenTemplates={() => setShowTemplatesModal(true)}
             onOpenAI={() => setShowAIModal(true)}
+            isNavigationMode={isNavigationMode}
+            setIsNavigationMode={setIsNavigationMode}
           />
         </div>
+
+        {/* Modo Navegação — aviso fixo no topo enquanto ativo, pra deixar
+            claro que edição/seleção estão travadas de propósito. */}
+        {isNavigationMode && (
+          <div className="absolute left-1/2 -translate-x-1/2 top-3 z-40 flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-2xl shadow-xl text-xs font-bold">
+            <Eye size={14} />
+            <span>Modo Navegação — só visualizar (pan/zoom), sem editar</span>
+            <button
+              onClick={() => setIsNavigationMode(false)}
+              className="ml-1 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer"
+            >
+              Sair
+            </button>
+          </div>
+        )}
+
+        {/* Modo de posicionar a seta/linha independente — aviso no topo até o clique no canvas */}
+        {isPlacingFreeEdge && !isNavigationMode && (
+          <div className="absolute left-1/2 -translate-x-1/2 top-3 z-40 flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-2xl shadow-xl text-xs font-bold animate-in fade-in slide-in-from-top-2 duration-150">
+            <Spline size={14} />
+            <span>Clique no canvas para posicionar a linha</span>
+            <button
+              onClick={() => setIsPlacingFreeEdge(false)}
+              className="ml-1 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer"
+            >
+              Cancelar (Esc)
+            </button>
+          </div>
+        )}
 
         {/* BOTTOM CENTER CANVAS CONTROLS (Undo, Redo, History Jump, Zoom, Fit) */}
         <div className="absolute left-1/2 -translate-x-1/2 bottom-3 z-30 flex items-center gap-1 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-2xl shadow-xl border border-zinc-200/90">
@@ -3905,13 +3999,13 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             onReconnectStart={onReconnectStart}
             onReconnect={onReconnect}
             onReconnectEnd={onReconnectEnd}
-            edgesReconnectable={(edge: Edge) => edge.id === selectedEdge?.id || !!edge.selected}
+            edgesReconnectable={!isNavigationMode && ((edge: Edge) => edge.id === selectedEdge?.id || !!edge.selected)}
             reconnectRadius={40}
             onPaneClick={onPaneClick}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            panOnDrag={toolMode === 'pan'}
-            selectionOnDrag={toolMode === 'select'}
+            onDrop={isNavigationMode ? undefined : onDrop}
+            onDragOver={isNavigationMode ? undefined : onDragOver}
+            panOnDrag={isNavigationMode || toolMode === 'pan'}
+            selectionOnDrag={!isNavigationMode && toolMode === 'select'}
             multiSelectionKeyCode={['Control', 'Meta', 'Shift']}
             connectionMode={ConnectionMode.Loose}
             snapToGrid={true}
@@ -3921,13 +4015,24 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             fitView
             fitViewOptions={{ padding: 0.25, duration: 400, minZoom: 0.02 }}
             deleteKeyCode={null}
+            // Modo Navegação: trava tudo que edita o fluxo, sobrando só
+            // pan/zoom — elementsSelectable=false também impede o React
+            // Flow de deixar qualquer coisa selecionada (o que já esconde
+            // alças de redimensionar/ajustar linha e toolbars contextuais,
+            // já que tudo isso é condicionado a "selected").
+            nodesDraggable={!isNavigationMode}
+            nodesConnectable={!isNavigationMode}
+            elementsSelectable={!isNavigationMode}
+            nodesFocusable={!isNavigationMode}
+            edgesFocusable={!isNavigationMode}
             defaultEdgeOptions={{
               type: 'smoothstep',
               reconnectable: true,
               markerEnd: { type: MarkerType.ArrowClosed, color: '#0f172a' },
               style: { stroke: '#0f172a', strokeWidth: 2 }
             }}
-            className={`bg-zinc-50 ${isConnecting ? "is-connecting" : ""}`}
+            className={`bg-zinc-50 ${isConnecting ? "is-connecting" : ""} ${isNavigationMode ? "cursor-default" : ""}`}
+            style={isPlacingFreeEdge ? { cursor: FREE_EDGE_CURSOR } : undefined}
           >
             {/* Dot Grid */}
             <Background color="#cbd5e1" gap={20} size={1.5} />
@@ -4033,25 +4138,28 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
         </main>
       </div>
 
-      {/* SYNCHRONIZED PROCESS SPREADSHEET / DATA TABLE PANEL */}
+      {/* SYNCHRONIZED PROCESS SPREADSHEET / DATA TABLE PANEL
+          Em Modo Navegação, os callbacks que editam vão vazios (a planilha
+          continua ABRINDO — é útil pra revisar os tempos calculados — só
+          não deixa nada ser alterado nela) */}
       <FlowDataTable
         isOpen={isDataTableOpen}
         onClose={() => setIsDataTableOpen(false)}
         nodes={nodes}
         edges={edges}
         timeSettings={timeSettings}
-        onUpdateNodeLabel={updateNodeLabel}
-        onUpdateNodeTiming={updateNodeTiming}
-        onAddStep={(type, label) => handleAddNode(type || 'process', { label })}
-        onDeleteNode={handleDeleteNode}
+        onUpdateNodeLabel={isNavigationMode ? () => {} : updateNodeLabel}
+        onUpdateNodeTiming={isNavigationMode ? () => {} : updateNodeTiming}
+        onAddStep={isNavigationMode ? () => {} : (type, label) => handleAddNode(type || 'process', { label })}
+        onDeleteNode={isNavigationMode ? () => {} : handleDeleteNode}
         onFocusNode={(nodeId) => {
           const targetNode = nodes.find(n => n.id === nodeId);
           if (targetNode) {
             setCenter(targetNode.position.x + 100, targetNode.position.y + 30, { zoom: 1.3, duration: 500 });
-            setNodes(nds => nds.map(n => ({ ...n, selected: n.id === nodeId })));
+            if (!isNavigationMode) setNodes(nds => nds.map(n => ({ ...n, selected: n.id === nodeId })));
           }
         }}
-        onOpenTimingModal={(nodeId) => setTimingModalNodeId(nodeId)}
+        onOpenTimingModal={isNavigationMode ? () => {} : (nodeId) => setTimingModalNodeId(nodeId)}
         showTimingMode={showTimingMode}
         onToggleTimingMode={() => {
           const nextVal = !showTimingMode;
@@ -4898,6 +5006,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
         </div>
       )}
     </div>
+    </NavigationModeContext.Provider>
   );
 }
 

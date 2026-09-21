@@ -19,6 +19,7 @@ import {
 import { getNodeDimensions } from './CustomNodes';
 import { collectLabelObstacles, placeEdgeLabel } from '../lib/labelPlacement';
 import { showToast } from '../lib/embedCompat';
+import { useNavigationMode } from '../lib/navigationMode';
 import {
   resolveReconnectCandidate,
   isValidNodeHandleId,
@@ -102,6 +103,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
 }) => {
   const { screenToFlowPosition, flowToScreenPosition, getEdges, getNodes } = useReactFlow();
   const { zoom } = useViewport();
+  const isNavigationMode = useNavigationMode();
   // Lista reativa: muda a cada movimento de forma, para recalcular os desvios
   const liveNodes = useNodes();
   const edgeData = (data as AdjustableEdgeData) || {};
@@ -760,10 +762,11 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
                   selected ? 'ring-1 ring-blue-400 bg-blue-50/50' : 'hover:bg-white'
                 }`}
                 onDoubleClick={(e) => {
+                  if (isNavigationMode) return;
                   e.stopPropagation();
                   setIsEditingLabel(true);
                 }}
-                title="Clique duplo para editar o texto diretamente na linha"
+                title={isNavigationMode ? undefined : 'Clique duplo para editar o texto diretamente na linha'}
               >
                 {labelText}
               </div>
