@@ -1606,9 +1606,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setReconnectingEndpoint(null);
 
     if (isMultiKey) {
-      setEdges((eds) =>
-        eds.map((eg) => (eg.id === edge.id ? { ...eg, selected: !eg.selected } : eg))
-      );
+      // O próprio React Flow já adiciona/remove esta linha do multi-select
+      // ao processar o clique internamente (Ctrl/Meta/Shift = teclas de
+      // multi-seleção, configuradas abaixo em multiSelectionKeyCode).
+      // Alternar "selected" de novo aqui cancelava esse toggle interno —
+      // clicar com Ctrl para selecionar ou remover da seleção não tinha
+      // efeito nenhum.
       setSelectedEdge(edge);
     } else {
       // Exclusivo: desmarca todas as formas e seleciona apenas esta linha
@@ -1684,16 +1687,16 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       return;
     }
 
-    if (isMultiKey) {
-      setNodes((nds) =>
-        nds.map((n) => (n.id === clickedNode.id ? { ...n, selected: !n.selected } : n))
-      );
-    } else {
+    if (!isMultiKey) {
       // Exclusivo: desmarca todas as linhas e seleciona apenas este nó
       setSelectedEdge(null);
       setEdges((eds) => eds.map((edgeItem) => ({ ...edgeItem, selected: false })));
       setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === clickedNode.id })));
     }
+    // Quando isMultiKey (Ctrl/Meta/Shift), o próprio React Flow já
+    // adiciona/remove este nó do multi-select ao processar o clique
+    // internamente — alternar "selected" de novo aqui cancelava esse
+    // toggle interno (ver comentário equivalente em onEdgeClick).
   }, [selectedEdge, reconnectingEndpoint, nodes, activeVersion, pushHistory, saveToCloud]);
 
   const onPaneClick = useCallback(() => {
@@ -3747,6 +3750,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             onDragOver={onDragOver}
             panOnDrag={toolMode === 'pan'}
             selectionOnDrag={toolMode === 'select'}
+            multiSelectionKeyCode={['Control', 'Meta', 'Shift']}
             connectionMode={ConnectionMode.Loose}
             snapToGrid={true}
             snapGrid={[10, 10]}
