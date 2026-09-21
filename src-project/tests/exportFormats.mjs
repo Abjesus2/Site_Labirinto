@@ -18,9 +18,21 @@ const edges = [
     id: 'e1', source: 'n2', target: 'n3', label: 'Sim',
     sourceHandle: 'right', targetHandle: 'left',
     type: 'smoothstep', style: { stroke: '#0f172a', strokeWidth: 2 },
-    data: { controlPoints: [{ x: 300, y: 200 }, { x: 300, y: 260 }] },
+    data: { manualRouting: true, controlPoints: [{ x: 300, y: 200 }, { x: 300, y: 260 }] },
   },
   { id: 'e2', source: 'n1', target: 'n2', type: 'smoothstep', style: { stroke: '#0f172a' }, data: {} },
+  // Roteada automaticamente (manualRouting ausente/false) mas com
+  // controlPoints preenchido pelo próprio roteador do app — o mesmo formato
+  // de uma aresta comum, não ajustada manualmente pelo usuário.
+  {
+    id: 'e3', source: 'n1', target: 'n3', type: 'smoothstep', style: { stroke: '#0f172a' },
+    data: { manualRouting: false, controlPoints: [{ x: 250, y: 100 }, { x: 250, y: 200 }] },
+  },
+  // Ponta presa numa junção (linha independente sem forma real do outro
+  // lado) — não existe elemento BPMN para "j1", então essa aresta não pode
+  // virar um <bpmn:sequenceFlow> (geraria um XML inválido, com sourceRef ou
+  // targetRef apontando pra um ID inexistente no processo).
+  { id: 'e4', source: 'n3', target: 'j1', type: 'smoothstep', style: { stroke: '#0f172a' }, data: {} },
 ];
 
 const drawio = generateDrawioXml(nodes, edges);
@@ -41,8 +53,16 @@ check('label com & e aspas nao quebra o xml', (() => {
 })());
 check('junção vira um pontinho, não um retângulo', /id="j1"[^>]*style="ellipse;/.test(drawio));
 check('aresta leva o lado de saida/entrada (exit/entry)', /id="e1"[^>]*style="[^"]*exitX=1;exitY=0.5;[^"]*entryX=0;entryY=0.5;/.test(drawio));
-check('aresta manual leva os pontos de dobra (waypoints)', /id="e1".*?<mxPoint x="300" y="200"\/><mxPoint x="300" y="260"\/>/.test(drawio));
-check('aresta sem controlPoints não gera Array de pontos vazio', !/id="e2".*?<Array as="points">/.test(drawio));
+check('aresta manual (manualRouting=true) leva os pontos de dobra (waypoints)', /id="e1".*?<mxPoint x="300" y="200"\/><mxPoint x="300" y="260"\/>/.test(drawio));
+check(
+  'aresta sem controlPoints não gera Array de pontos vazio',
+  !/id="e2".*?<Array as="points">/.test(drawio.slice(drawio.indexOf('id="e2"'), drawio.indexOf('id="e2"') + 400))
+);
+check(
+  'aresta roteada automaticamente (manualRouting=false) NÃO leva pontos de dobra travados — Draw.io recalcula sozinho ao mover formas',
+  !/id="e3".*?<Array as="points">/.test(drawio.slice(drawio.indexOf('id="e3"'), drawio.indexOf('id="e3"') + 400))
+);
+check('aresta roteada automaticamente ainda usa edgeStyle ortogonal', /id="e3"[^>]*style="[^"]*edgeStyle=orthogonalEdgeStyle;/.test(drawio));
 
 const bpmn = generateBpmnXml(nodes, edges);
 check('bpmn bem formado', bpmn.startsWith('<?xml') && bpmn.endsWith('</bpmn:definitions>'));
@@ -50,5 +70,7 @@ check('bpmn tem a seção de diagrama (BPMN DI) com posição real', /<bpmndi:BP
 check('bpmn não inclui raia/quadro como elemento de processo', !bpmn.includes('id="lane1"'));
 check('bpmn gateway para a decisão', /<bpmn:exclusiveGateway id="n2"/.test(bpmn));
 check('bpmn edge tem waypoints', /<bpmndi:BPMNEdge id="e1_di"[^>]*><di:waypoint/.test(bpmn));
+check('bpmn NÃO gera sequenceFlow com ponta em junção (XML inválido, ID inexistente)', !bpmn.includes('id="e4"'));
+check('bpmn NÃO referencia a junção como sourceRef/targetRef em nenhum sequenceFlow', !/(sourceRef|targetRef)="j1"/.test(bpmn));
 
 console.log(R.join('\n'));

@@ -146,7 +146,20 @@ export function generateDrawioXml(nodes: any[], edges: any[]): string {
   edges.forEach((e) => {
     const label = xmlEscape(e.label || '');
     const style = getDrawioEdgeStyle(e);
-    const controlPoints: Point[] = Array.isArray(e.data?.controlPoints) ? e.data.controlPoints : [];
+    // Só grava os pontos de dobra (waypoints absolutos) de arestas que o
+    // usuário ajustou manualmente no app (data.manualRouting === true). Para
+    // as demais — a maioria, roteadas automaticamente pelo próprio app ao
+    // mover formas — gravar esses pontos travava o traçado: como são
+    // coordenadas absolutas congeladas no momento da exportação, ao mover
+    // qualquer forma dentro do Draw.io a linha passava a ir direto (em
+    // diagonal, cortando por cima de tudo) da nova borda da forma até o
+    // ponto antigo, em vez de se re-rotear. Sem os pontos, o Draw.io usa só
+    // edgeStyle=orthogonalEdgeStyle e os exitX/exitY/entryX/entryY (que são
+    // relativos à própria forma, então acompanham ela) para recalcular um
+    // traçado ortogonal do zero sempre que algo se move — se comportando
+    // como qualquer conector desenhado direto no Draw.io.
+    const isManual = e.data?.manualRouting === true;
+    const controlPoints: Point[] = isManual && Array.isArray(e.data?.controlPoints) ? e.data.controlPoints : [];
     let geometry = '<mxGeometry relative="1" as="geometry">';
     if (controlPoints.length > 0) {
       geometry +=
@@ -183,12 +196,19 @@ function getBpmnElement(node: any): { tag: string; width: number; height: number
 export function generateBpmnXml(nodes: any[], edges: any[]): string {
   const flowNodes = nodes.filter((n) => n.type !== 'swimlane' && n.type !== 'frame' && n.type !== 'junction');
   const elements = flowNodes.map((n) => ({ node: n, ...getBpmnElement(n) }));
+  const nodeById = new Map(flowNodes.map((n) => [n.id, n]));
 
   let process = '';
   elements.forEach(({ node, tag }) => {
     process += `<bpmn:${tag} id="${xmlEscape(node.id)}" name="${xmlEscape(node.data?.label)}"/>`;
   });
   edges.forEach((e) => {
+    // Uma ponta na raia/quadro/junção (ex.: linha independente, sem forma
+    // nenhuma) não tem elemento BPMN correspondente — emitir o
+    // sequenceFlow mesmo assim gerava um sourceRef/targetRef apontando para
+    // um ID que não existe no processo, um XML BPMN inválido que Bizagi e
+    // outros validadores rejeitam ou recusam abrir corretamente.
+    if (!nodeById.has(e.source) || !nodeById.has(e.target)) return;
     process += `<bpmn:sequenceFlow id="${xmlEscape(e.id)}" sourceRef="${xmlEscape(e.source)}" targetRef="${xmlEscape(e.target)}" name="${xmlEscape(e.label || '')}"/>`;
   });
 
@@ -202,7 +222,6 @@ export function generateBpmnXml(nodes: any[], edges: any[]): string {
     shapes += `<bpmndi:BPMNShape id="${xmlEscape(node.id)}_di" bpmnElement="${xmlEscape(node.id)}"><dc:Bounds x="${box.x}" y="${box.y}" width="${width}" height="${height}"/></bpmndi:BPMNShape>`;
   });
 
-  const nodeById = new Map(flowNodes.map((n) => [n.id, n]));
   let bpmnEdges = '';
   edges.forEach((e) => {
     const source = nodeById.get(e.source);

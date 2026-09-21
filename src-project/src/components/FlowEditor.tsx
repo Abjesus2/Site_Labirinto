@@ -21,7 +21,8 @@ import {
   useReactFlow,
   useStore,
   ConnectionMode,
-  Panel
+  Panel,
+  getViewportForBounds
 } from '@xyflow/react';
 import { toPng, toSvg } from 'html-to-image';
 import jsPDF from 'jspdf';
@@ -98,7 +99,6 @@ import { MiroTemplatesModal } from './MiroTemplatesModal';
 import { MiroPresentationMode } from './MiroPresentationMode';
 import { FlowDataTable } from './FlowDataTable';
 import { TimingModal } from './TimingModal';
-import { SaveModal } from './SaveModal';
 import { ShareModal } from './ShareModal';
 import { showToast, copyText } from '../lib/embedCompat';
 import { openAISettings } from '../lib/aiSettingsUI';
@@ -449,7 +449,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const [title, setTitle] = useState("Carregando...");
   const [loading, setLoading] = useState(true);
   
-  const { screenToFlowPosition, zoomIn, zoomOut, fitView, setCenter, flowToScreenPosition, getViewport, setViewport } = useReactFlow();
+  const { screenToFlowPosition, zoomIn, zoomOut, fitView, setCenter, flowToScreenPosition, getViewport, setViewport, getNodes, getNodesBounds } = useReactFlow();
   
   // Tool Modes & Floating Toolbars
   const [toolMode, setToolMode] = useState<'select' | 'pan'>('select');
@@ -539,9 +539,14 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const [timingModalNodeId, setTimingModalNodeId] = useState<string | null>(null);
   const [isNodeToolbarVisible, setIsNodeToolbarVisible] = useState<boolean>(true);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState<boolean>(true);
-  const [showSaveModal, setShowSaveModal] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<boolean>(false);
+
+  // Progresso de exportação (PNG/SVG/PDF) — a captura da imagem é pesada e
+  // trava a thread principal por um instante; este estado mostra um
+  // indicador visível em vez de deixar a tela parecer congelada sem feedback.
+  const [exportStatus, setExportStatus] = useState<{ label: string } | null>(null);
+  const exportCancelledRef = useRef(false);
 
   // Undo / Redo History Stack with Timeline Tracking
   const [history, setHistory] = useState<{ id: string; action: string; timestamp: number; nodes: Node[]; edges: Edge[] }[]>([]);
@@ -2801,63 +2806,145 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     }
   };
 
-  // Export handlers
-  const exportPng = () => {
-    if (!reactFlowWrapper.current) return;
-    toPng(reactFlowWrapper.current, { backgroundColor: '#ffffff' }).then((dataUrl) => {
-      const a = document.createElement('a');
-      a.setAttribute('download', `${title || 'fluxograma'}.png`);
-      a.setAttribute('href', dataUrl);
-      a.click();
-    });
-  };
+  // Export handlers (Imagem/PDF)
+  //
+  // Antes, toPng/toSvg capturavam reactFlowWrapper.current inteiro — a
+  // barra de ferramentas, a sidebar e o minimapa iam junto na imagem, e como
+  // a captura seguia o pan/zoom da tela no momento do clique, ficava cheia
+  // de espaço em branco (ou cortando o fluxo) e com qualidade ruim quando
+  // dava zoom antes de exportar. Agora a captura mira só em
+  // ".react-flow__viewport" (a camada que só tem os nós/arestas, sem os
+  // painéis/botões, que ficam fora dela no DOM do React Flow) e usa
+  // getNodesBounds + getViewportForBounds para montar um enquadramento que
+  // sempre cabe o fluxo inteiro, na resolução calculada a partir do próprio
+  // tamanho do conteúdo (não do zoom atual da tela).
+  const EXPORT_MAX_DIMENSION = 4096; // trava de segurança p/ fluxos enormes não travarem o navegador
+  const EXPORT_PADDING = 48;
 
-  const exportSvg = () => {
-    if (!reactFlowWrapper.current) return;
-    toSvg(reactFlowWrapper.current, { backgroundColor: '#ffffff' }).then((dataUrl) => {
-      const a = document.createElement('a');
-      a.setAttribute('download', `${title || 'fluxograma'}.svg`);
-      a.setAttribute('href', dataUrl);
-      a.click();
-    });
-  };
+  const captureFlowDataUrl = useCallback(async (format: 'png' | 'svg'): Promise<string | null> => {
+    const wrapper = reactFlowWrapper.current;
+    const viewportEl = wrapper?.querySelector('.react-flow__viewport') as HTMLElement | null;
+    if (!viewportEl) return null;
 
-  const handleCloudSave = (type: string, location: string) => {
-    setIsSaving(true);
-    setSaveError(false);
-    const data = getLocalDiagram(diagramId);
-    if (data) {
-      data.title = title;
-      data.updatedAt = Date.now();
-      saveLocalDiagram(data);
+    const liveNodes = getNodes();
+    // Usa o getNodesBounds do hook useReactFlow (não a função solta do
+    // pacote) — ele já resolve o nodeLookup interno da lib corretamente.
+    const bounds = getNodesBounds(liveNodes.length > 0 ? liveNodes : nodes);
+    const contentWidth = Math.max(1, bounds.width);
+    const contentHeight = Math.max(1, bounds.height);
+
+    // Escala para a maior resolução possível sem estourar EXPORT_MAX_DIMENSION
+    // — a margem (padding) entra na conta do maior lado ANTES de calcular a
+    // escala, senão o resultado final passava do limite pelo valor do
+    // padding já escalado.
+    const rawWidth = contentWidth + EXPORT_PADDING * 2;
+    const rawHeight = contentHeight + EXPORT_PADDING * 2;
+    const scale = Math.min(3, EXPORT_MAX_DIMENSION / Math.max(rawWidth, rawHeight));
+    const paddingPx = EXPORT_PADDING * Math.max(1, scale);
+    const imageWidth = Math.round(rawWidth * scale);
+    const imageHeight = Math.round(rawHeight * scale);
+    // getViewportForBounds trata um "padding" numérico como FRAÇÃO do
+    // tamanho da imagem (ex.: 0.1 = 10%), não pixels — passar o valor em
+    // pixels direto (ex.: 144) fazia a lib interpretar como "144×" de
+    // margem, sobrando quase nada de espaço pro conteúdo. Uma string
+    // terminada em "px" é o formato que a própria lib documenta para
+    // pixels absolutos.
+    const flowViewport = getViewportForBounds(bounds, imageWidth, imageHeight, 0.05, 4, `${paddingPx}px`);
+
+    // Some a seleção/alças/toolbars flutuantes (que só aparecem com algo
+    // selecionado) antes de capturar, para a imagem exportada mostrar só o
+    // fluxograma — sem quadrado de seleção, alças de redimensionar/ajustar
+    // linha ou a caixinha de editar rótulo da linha.
+    const selectedNodeIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
+    const selectedEdgeIds = new Set(edges.filter(e => e.selected).map(e => e.id));
+    const hadSelection = selectedNodeIds.size > 0 || selectedEdgeIds.size > 0;
+    if (hadSelection) {
+      setNodes(nds => nds.map(n => (n.selected ? { ...n, selected: false } : n)));
+      setEdges(eds => eds.map(e => (e.selected ? { ...e, selected: false } : e)));
     }
-    setIsSaving(false);
 
-    if (location === 'github') {
-      // Não existe integração com GitHub no app: em vez de fingir que salvou,
-      // o arquivo é gerado para o usuário enviar ao repositório.
-      showToast({
-        message: 'Sem integração direta com o GitHub: o arquivo será baixado para você enviar ao repositório.',
-        tone: 'warn',
-        timeout: 12000,
-      });
-    }
+    // Deixa o navegador pintar o overlay de progresso (e a deseleção acima)
+    // antes de travar a thread principal com a captura — sem isso a tela
+    // parece congelada, sem nenhum indício de que algo está acontecendo.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
-    if (type === 'xml') {
-      exportDrawio();
-    } else if (type === 'json') {
-      exportJson();
-    } else if (type === 'png') {
-      exportPng();
+    const capture = format === 'svg' ? toSvg : toPng;
+    let dataUrl: string | null = null;
+    try {
+      dataUrl = await capture(viewportEl, {
+        backgroundColor: '#ffffff',
+        width: imageWidth,
+        height: imageHeight,
+        filter: (node: any) => {
+          const cls = node?.classList;
+          if (!cls || typeof cls.contains !== 'function') return true;
+          // Nunca inclui alças de conexão, de redimensionar/ajustar linha
+          // ou o destaque de seleção na imagem exportada.
+          return !(
+            cls.contains('react-flow__handle') ||
+            cls.contains('react-flow__resize-control') ||
+            cls.contains('drawio-edge-interactive-handles')
+          );
+        },
+        style: {
+          width: `${imageWidth}px`,
+          height: `${imageHeight}px`,
+          transform: `translate(${flowViewport.x}px, ${flowViewport.y}px) scale(${flowViewport.zoom})`,
+        },
+      } as any);
+    } finally {
+      if (hadSelection) {
+        setNodes(nds => nds.map(n => (selectedNodeIds.has(n.id) ? { ...n, selected: true } : n)));
+        setEdges(eds => eds.map(e => (selectedEdgeIds.has(e.id) ? { ...e, selected: true } : e)));
+      }
     }
-  };
+    return dataUrl;
+  }, [getNodes, getNodesBounds, nodes, edges]);
+
+  const runExport = useCallback(async (label: string, task: () => Promise<void>) => {
+    exportCancelledRef.current = false;
+    setExportStatus({ label });
+    try {
+      await task();
+    } catch (err: any) {
+      if (!exportCancelledRef.current) {
+        console.error(err);
+        showToast({ message: `Falha ao exportar: ${err?.message || 'erro desconhecido'}`, tone: 'error', timeout: 10000 });
+      }
+    } finally {
+      setExportStatus(null);
+    }
+  }, []);
+
+  const cancelExport = useCallback(() => {
+    exportCancelledRef.current = true;
+    setExportStatus(null);
+  }, []);
+
+  const exportPng = () => runExport('Gerando imagem PNG...', async () => {
+    const dataUrl = await captureFlowDataUrl('png');
+    if (!dataUrl || exportCancelledRef.current) return;
+    const a = document.createElement('a');
+    a.setAttribute('download', `${title || 'fluxograma'}.png`);
+    a.setAttribute('href', dataUrl);
+    a.click();
+  });
+
+  const exportSvg = () => runExport('Gerando imagem SVG...', async () => {
+    const dataUrl = await captureFlowDataUrl('svg');
+    if (!dataUrl || exportCancelledRef.current) return;
+    const a = document.createElement('a');
+    a.setAttribute('download', `${title || 'fluxograma'}.svg`);
+    a.setAttribute('href', dataUrl);
+    a.click();
+  });
 
   // Prevent browser default save
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
-        setShowSaveModal(true);
+        setShowExportMenu(true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -2925,16 +3012,36 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
     URL.revokeObjectURL(url);
   };
 
-  const exportPdf = () => {
-    toPng(reactFlowWrapper.current, { backgroundColor: '#ffffff' }).then((dataUrl) => {
-      const pdf = new jsPDF('l', 'mm', 'a4');
-      const imgProps = pdf.getImageProperties(dataUrl);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`${title || 'fluxograma'}.pdf`);
-    });
-  };
+  const exportPdf = () => runExport('Gerando PDF...', async () => {
+    const dataUrl = await captureFlowDataUrl('png');
+    if (!dataUrl || exportCancelledRef.current) return;
+
+    // Orientação escolhida pela proporção real do fluxo (não sempre
+    // paisagem) — evita desperdiçar página com fluxos altos e estreitos.
+    // getImageProperties só decodifica a imagem, então funciona com
+    // qualquer instância do jsPDF, independente da orientação dela.
+    const probeProps = new jsPDF('l', 'mm', 'a4').getImageProperties(dataUrl);
+    const orientation = probeProps.height > probeProps.width ? 'p' : 'l';
+    const pdf = new jsPDF(orientation, 'mm', 'a4');
+    const imgProps = pdf.getImageProperties(dataUrl);
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    const scaledHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+    if (scaledHeight <= pdfHeight) {
+      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, scaledHeight);
+    } else {
+      // Fluxo mais alto que uma página: divide em várias páginas
+      // deslocando a mesma imagem para cima a cada página (o jsPDF recorta
+      // automaticamente o que sai da área da página).
+      const pageCount = Math.ceil(scaledHeight / pdfHeight);
+      for (let i = 0; i < pageCount; i++) {
+        if (i > 0) pdf.addPage();
+        pdf.addImage(dataUrl, 'PNG', 0, -i * pdfHeight, pdfWidth, scaledHeight);
+      }
+    }
+    pdf.save(`${title || 'fluxograma'}.pdf`);
+  });
 
   const exportDrawio = () => {
     const xml = generateDrawioXml(nodes, edges);
@@ -3055,10 +3162,15 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
 
         {/* Top Right Actions */}
         <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap sm:flex-nowrap">
-          {/* Real-time Save Status Indicator with "Guardar como..." option */}
+          {/* Real-time Save Status Indicator — abre o mesmo menu Exportar
+              (antes abria um modal "Guardar como..." à parte, com um
+              seletor de formato menor e incompleto que duplicava opções já
+              existentes no menu Exportar, com um destino "GitHub" que não
+              enviava nada de verdade, e um campo de renomear que já existe
+              no campo de título ao lado — tudo isso foi removido daqui). */}
           <div className="relative shrink-0 flex items-center gap-1.5">
             <button
-              onClick={() => setShowSaveModal(true)}
+              onClick={() => setShowExportMenu(true)}
               className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 border rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
                 isSaving
                   ? 'bg-zinc-50/90 border-zinc-200/90 text-zinc-500 hover:bg-zinc-100'
@@ -3066,7 +3178,13 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                   ? 'bg-red-50/90 border-red-200/95 text-red-800 hover:bg-red-100'
                   : 'bg-emerald-50/90 border-emerald-200/90 text-emerald-800 hover:bg-emerald-100'
               }`}
-              title="Guardar como... (Clique para renomear ou exportar)"
+              title={
+                isSaving
+                  ? 'Salvando neste navegador...'
+                  : saveError
+                  ? 'Erro ao salvar neste navegador'
+                  : 'Salvo automaticamente neste navegador (sem nuvem) — clique para exportar/baixar'
+              }
             >
               <div className={`w-2 h-2 rounded-full shrink-0 ${
                 isSaving
@@ -3075,9 +3193,9 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                   ? 'bg-red-600'
                   : 'bg-emerald-500 animate-pulse'
               }`} />
-              
+
               <span className="font-bold hidden xs:inline">
-                {isSaving ? 'Salvando...' : saveError ? 'Erro ao Salvar' : 'Salvo na Nuvem'}
+                {isSaving ? 'Salvando...' : saveError ? 'Erro ao Salvar' : 'Salvo Neste Navegador'}
               </span>
               <span className="font-bold xs:hidden">
                 {isSaving ? 'Salvando' : saveError ? 'Erro' : 'Salvo'}
@@ -3487,7 +3605,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                   <button
                     onClick={() => { exportBpmn(); setShowExportMenu(false); }}
                     className="w-full px-4 py-2 text-left font-medium text-zinc-700 hover:bg-zinc-50 flex items-center justify-between"
-                    title="Padrão BPMN 2.0 XML compatível com Camunda, Bizagi e softwares de processo"
+                    title="Padrão BPMN 2.0 XML compatível com Camunda, bpmn.io e softwares de processo. No Bizagi Modeler: use a aba Export/Import → Importar BPMN (não abre direto como um modelo .bpm nativo)"
                   >
                     <span>Padrão BPMN 2.0</span>
                     <span className="text-[10px] text-zinc-400">.bpmn</span>
@@ -3905,15 +4023,6 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
         node={nodes.find(n => n.id === timingModalNodeId) || null}
         onSaveTiming={(id, timing) => updateNodeTiming(id, timing)}
         timeSettings={timeSettings}
-      />
-
-      {/* SAVE MODAL */}
-      <SaveModal
-        isOpen={showSaveModal}
-        onClose={() => setShowSaveModal(false)}
-        onSave={handleCloudSave}
-        fileName={title}
-        setFileName={setTitle}
       />
 
       {/* GOOGLE DRIVE SHARE MODAL */}
@@ -4596,6 +4705,35 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
            
            <div className="w-full h-1.5 bg-zinc-100 rounded-full overflow-hidden">
              <div className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
+           </div>
+        </div>
+      )}
+
+      {/* Export Progress Balloon — evita a tela parecer travada enquanto a
+          captura da imagem/PDF processa (pode levar alguns segundos em
+          fluxos grandes). "Cancelar" descarta o resultado e libera a tela
+          na hora; o processamento em si, por rodar na mesma thread
+          principal do navegador (html-to-image precisa do DOM ao vivo, o
+          que não é acessível de uma Web Worker), não tem como ser
+          interrompido no meio — só ignorado quando terminar. */}
+      {exportStatus && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-white rounded-2xl shadow-2xl border border-blue-100 p-4 w-96 flex flex-col gap-3 animate-in slide-in-from-top-4 fade-in duration-300">
+           <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-bold text-zinc-800">
+                 <Loader2 size={16} className="text-blue-600 animate-spin" />
+                 {exportStatus.label}
+              </div>
+              <button onClick={cancelExport} className="text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-md transition-colors">
+                 Cancelar
+              </button>
+           </div>
+
+           <div className="text-xs text-zinc-500">
+              Preparando o arquivo na melhor qualidade possível...
+           </div>
+
+           <div className="w-full h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+             <div className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 animate-pulse rounded-full w-full" />
            </div>
         </div>
       )}
