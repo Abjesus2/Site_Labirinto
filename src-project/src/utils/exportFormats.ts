@@ -308,6 +308,30 @@ const uuid = (): string => {
   });
 };
 
+/**
+ * Lado mais próximo de "box" na direção de "otherBox" — mesma convenção de
+ * porta observada no arquivo de exemplo real do Bizagi (1=Cima, 2=Baixo,
+ * 4=Direita; 3=Esquerda por simetria com o par 1/2). Devolve também o
+ * ponto exato na borda daquele lado, pra não desenhar a linha saindo do
+ * CENTRO da forma (que sem FromPort/ToPort o Bizagi cruza direto por cima
+ * de qualquer forma no caminho, em vez de recortar na borda).
+ */
+const getBizagiPort = (box: BizagiBox, otherBox: BizagiBox): { port: number; point: Point } => {
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const dx = otherBox.x + otherBox.width / 2 - cx;
+  const dy = otherBox.y + otherBox.height / 2 - cy;
+
+  if (Math.abs(dy) >= Math.abs(dx)) {
+    return dy >= 0
+      ? { port: 2, point: { x: cx, y: box.y + box.height } } // sai pela base
+      : { port: 1, point: { x: cx, y: box.y } }; // sai pelo topo
+  }
+  return dx >= 0
+    ? { port: 4, point: { x: box.x + box.width, y: cy } } // sai pela direita
+    : { port: 3, point: { x: box.x, y: cy } }; // sai pela esquerda
+};
+
 const bizagiActivityBody = (node: any, box: BizagiBox): string => {
   const override = node.data?.styleOverride || {};
   let colorKey = 'task';
@@ -318,8 +342,13 @@ const bizagiActivityBody = (node: any, box: BizagiBox): string => {
   const fillColor = hexToBizagiColor(override.backgroundColor || defaults.fill);
   const borderColor = hexToBizagiColor(override.borderColor || defaults.border);
 
+  // TextX/TextY/TextWidth/TextHeight ausentes fazem o Bizagi jogar o rótulo
+  // pra FORA da forma (abaixo dela) em vez de centralizado dentro — visto
+  // no arquivo de exemplo real, onde o evento de início trazia esses
+  // atributos apontando pra cima da própria área da forma (mesmo
+  // X/Y/Width/Height do NodeGraphicsInfo).
   const graphics =
-    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${Math.round(box.height)}" Width="${Math.round(box.width)}" BorderColor="${borderColor}" FillColor="${fillColor}" BorderVisible="false">` +
+    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${Math.round(box.height)}" Width="${Math.round(box.width)}" BorderColor="${borderColor}" FillColor="${fillColor}" BorderVisible="false" TextX="${Math.round(box.x)}" TextY="${Math.round(box.y)}" TextWidth="${Math.round(box.width)}" TextHeight="${Math.round(box.height)}">` +
     `<Coordinates XCoordinate="${Math.round(box.x)}" YCoordinate="${Math.round(box.y)}" />` +
     '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>8</SizeFont><Bold>false</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>' +
     '<TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos>';
@@ -384,22 +413,30 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
     const target = nodeById.get(e.target);
     const sBox = getNodeBox(source);
     const tBox = getNodeBox(target);
-    const sCenter = { x: offsetX(sBox.x + sBox.width / 2), y: offsetY(sBox.y + sBox.height / 2) };
-    const tCenter = { x: offsetX(tBox.x + tBox.width / 2), y: offsetY(tBox.y + tBox.height / 2) };
+    const sOff: BizagiBox = { x: offsetX(sBox.x), y: offsetY(sBox.y), width: sBox.width, height: sBox.height };
+    const tOff: BizagiBox = { x: offsetX(tBox.x), y: offsetY(tBox.y), width: tBox.width, height: tBox.height };
+
+    // Sem FromPort/ToPort, o Bizagi não recorta a linha na borda da forma —
+    // ele desenha reto de ponto a ponto, então um waypoint no CENTRO
+    // atravessa a forma inteira (visível no teste real: uma coluna de
+    // formas empilhadas verticalmente virava uma única linha reta
+    // cruzando por dentro de todas elas). getBizagiPort calcula o lado
+    // mais próximo pela posição relativa entre origem e destino (a mesma
+    // convenção 1=Cima/2=Baixo/3=Esquerda/4=Direita vista no arquivo de
+    // exemplo real) e devolve o ponto exato na BORDA daquele lado.
+    const { port: fromPort, point: fromPoint } = getBizagiPort(sOff, tOff);
+    const { port: toPort, point: toPoint } = getBizagiPort(tOff, sOff);
+
     const controlPoints: Point[] = Array.isArray(e.data?.controlPoints)
       ? e.data.controlPoints.map((p: Point) => ({ x: offsetX(p.x), y: offsetY(p.y) }))
       : [];
-    const waypoints = [sCenter, ...controlPoints, tCenter];
+    const waypoints = [fromPoint, ...controlPoints, toPoint];
     const coords = waypoints.map((p) => `<Coordinates XCoordinate="${Math.round(p.x)}" YCoordinate="${Math.round(p.y)}" />`).join('');
 
-    // FromPort/ToPort (o lado exato da conexão) ficam de fora de propósito
-    // — omitidos, o próprio Bizagi calcula o lado mais próximo sozinho,
-    // recalculado a cada movimento (mesmo raciocínio da correção no
-    // Draw.io: um ponto fixo trava o traçado quando a forma se move).
     const nameAttr = e.label ? ` Name="${xmlEscape(e.label)}"` : '';
     transitionsXml +=
       `<Transition Id="${uuid()}" From="${sourceId}" To="${targetId}"${nameAttr}><Condition /><Description />` +
-      '<ConnectorGraphicsInfos><ConnectorGraphicsInfo ToolId="BizAgi_Process_Modeler" BorderColor="-16777216">' +
+      `<ConnectorGraphicsInfos><ConnectorGraphicsInfo FromPort="${fromPort}" ToPort="${toPort}" ToolId="BizAgi_Process_Modeler" BorderColor="-16777216">` +
       '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>8</SizeFont><Bold>false</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>' +
       `<TextDirection xsi:nil="true" />${coords}</ConnectorGraphicsInfo></ConnectorGraphicsInfos><ExtendedAttributes /></Transition>`;
   });

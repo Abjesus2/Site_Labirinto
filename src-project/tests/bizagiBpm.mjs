@@ -74,4 +74,47 @@ check('rótulo da aresta de decisão vira Name da Transition', /<Transition[^>]*
 check('início usa a cor verde padrão do Bizagi (FillColor=-1638505)', diagramXml.includes('FillColor="-1638505"'));
 check('decisão usa a cor amarela padrão do Bizagi (FillColor=-52)', diagramXml.includes('FillColor="-52"'));
 
+// Bug real visto ao abrir de verdade no Bizagi Modeler: sem TextX/TextY, o
+// rótulo da forma saía flutuando ABAIXO dela em vez de dentro — inclusive
+// deixando a impressão de "forma sem texto" numa decisão com nome longo.
+check(
+  'toda forma leva TextX/TextY/TextWidth/TextHeight (rótulo fica dentro da forma, não flutuando fora)',
+  /<NodeGraphicsInfo[^>]*TextX="\d+"[^>]*TextY="\d+"[^>]*TextWidth="\d+"[^>]*TextHeight="\d+"/.test(diagramXml)
+);
+
+// Outro bug real: sem FromPort/ToPort e com o waypoint inicial/final no
+// CENTRO da forma (em vez da borda), o Bizagi não recorta a linha —
+// formas alinhadas na mesma coluna viravam uma única linha reta
+// atravessando por dentro de todas elas. Confere que a Transition
+// Início -> Receber Pedido sai da BORDA direita de "Início" (n1 é mais
+// estreito e fica à esquerda de n2), não do centro dele.
+const activityId = (name) => {
+  const m = new RegExp(`<Activity Id="([0-9a-f-]+)" Name="${name}"`, 'i').exec(diagramXml);
+  return m ? m[1] : null;
+};
+const inicioId = activityId('Início');
+const pedidoId = activityId('Receber Pedido');
+check('achou os IDs gerados das activities "Início" e "Receber Pedido"', !!inicioId && !!pedidoId);
+
+const transRegex = new RegExp(`<Transition Id="[0-9a-f-]+" From="${inicioId}" To="${pedidoId}"[^>]*>([\\s\\S]*?)</Transition>`);
+const transMatch = transRegex.exec(diagramXml);
+check('achou a Transition Início -> Receber Pedido', !!transMatch);
+if (transMatch) {
+  check('a Transition leva FromPort e ToPort (o Bizagi não recorta a linha na borda sem isso)', /FromPort="4"/.test(transMatch[0]) && /ToPort="3"/.test(transMatch[0]));
+  const coordMatches = [...transMatch[1].matchAll(/<Coordinates XCoordinate="(\d+)" YCoordinate="(\d+)"/g)];
+  check('a Transition tem pelo menos 2 pontos (início e fim)', coordMatches.length >= 2);
+  if (coordMatches.length >= 2) {
+    const firstX = Number(coordMatches[0][1]);
+    const firstY = Number(coordMatches[0][2]);
+    // Nas posições do fixture (n1 start em x:100,y:100,160x48; n2 process
+    // em x:300,y:100,210x60; deslocados pro espaço do Bizagi com margem
+    // 50 a partir do (minX,minY) global de todos os nós), "Início" fica em
+    // x:[50,210] y:[100,148] — como "Receber Pedido" está à direita dele, a
+    // linha tem de sair exatamente da borda direita (x=210, y=124 =
+    // centro vertical), não do centro da forma (que seria x=130).
+    check('o ponto de partida da linha fica na borda direita de "Início" (x=210), não no centro (x=130)', firstX === 210, 'firstX=' + firstX);
+    check('o ponto de partida fica no centro vertical de "Início" (y=124)', firstY === 124, 'firstY=' + firstY);
+  }
+}
+
 console.log(R.join('\n'));
