@@ -98,22 +98,36 @@ const HANDLE_TO_UNIT: Record<string, Point> = {
   'right-bottom-75': { x: 1, y: 0.75 },
 };
 
-const getDrawioEdgeStyle = (edge: any): string => {
+const getDrawioEdgeStyle = (edge: any, isManual: boolean): string => {
   const style = edge.style || {};
   const type = edge.type || 'smoothstep';
   const parts = ['html=1;'];
   if (type === 'straight') parts.push('edgeStyle=none;');
   else if (type === 'default') parts.push('curved=1;rounded=0;');
-  else parts.push('edgeStyle=orthogonalEdgeStyle;rounded=0;');
+  else parts.push('edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;');
   if (style.strokeDasharray) parts.push('dashed=1;');
   parts.push(`strokeColor=${style.stroke || '#0f172a'};`);
   parts.push(`strokeWidth=${style.strokeWidth || 2};`);
   parts.push('endArrow=classic;');
 
-  const exit = edge.sourceHandle ? HANDLE_TO_UNIT[edge.sourceHandle] : null;
-  if (exit) parts.push(`exitX=${exit.x};exitY=${exit.y};exitDx=0;exitDy=0;`);
-  const entry = edge.targetHandle ? HANDLE_TO_UNIT[edge.targetHandle] : null;
-  if (entry) parts.push(`entryX=${entry.x};entryY=${entry.y};entryDx=0;entryDy=0;`);
+  // Pontos de saída/entrada fixos (exitX/exitY/entryX/entryY) são um dos
+  // gatilhos conhecidos do mxGraph (motor do Draw.io) para o roteamento
+  // ortogonal "degradar" para uma linha reta direto entre os dois pontos
+  // fixos — em vez de recalcular ângulos retos — quando não há waypoints
+  // explícitos e a forma se move para uma posição bem diferente da
+  // original. Para arestas roteadas automaticamente (a maioria), deixamos
+  // sem ponto fixo (conexão "flutuante" — o Draw.io escolhe o lado mais
+  // próximo do perímetro sozinho, recalculado a cada movimento), que é
+  // exatamente o modo mais testado/robusto do Draw.io (o mesmo usado
+  // quando alguém desenha uma seta direto nele sem prender num ponto
+  // específico). Arestas ajustadas manualmente no app mantêm o ponto fixo,
+  // já que o usuário escolheu esse lado de propósito.
+  if (isManual) {
+    const exit = edge.sourceHandle ? HANDLE_TO_UNIT[edge.sourceHandle] : null;
+    if (exit) parts.push(`exitX=${exit.x};exitY=${exit.y};exitDx=0;exitDy=0;`);
+    const entry = edge.targetHandle ? HANDLE_TO_UNIT[edge.targetHandle] : null;
+    if (entry) parts.push(`entryX=${entry.x};entryY=${entry.y};entryDx=0;entryDy=0;`);
+  }
 
   return parts.join('');
 };
@@ -145,20 +159,16 @@ export function generateDrawioXml(nodes: any[], edges: any[]): string {
 
   edges.forEach((e) => {
     const label = xmlEscape(e.label || '');
-    const style = getDrawioEdgeStyle(e);
-    // Só grava os pontos de dobra (waypoints absolutos) de arestas que o
-    // usuário ajustou manualmente no app (data.manualRouting === true). Para
-    // as demais — a maioria, roteadas automaticamente pelo próprio app ao
-    // mover formas — gravar esses pontos travava o traçado: como são
-    // coordenadas absolutas congeladas no momento da exportação, ao mover
-    // qualquer forma dentro do Draw.io a linha passava a ir direto (em
-    // diagonal, cortando por cima de tudo) da nova borda da forma até o
-    // ponto antigo, em vez de se re-rotear. Sem os pontos, o Draw.io usa só
-    // edgeStyle=orthogonalEdgeStyle e os exitX/exitY/entryX/entryY (que são
-    // relativos à própria forma, então acompanham ela) para recalcular um
-    // traçado ortogonal do zero sempre que algo se move — se comportando
-    // como qualquer conector desenhado direto no Draw.io.
+    // Só grava os pontos de dobra (waypoints absolutos) — e só usa ponto de
+    // saída/entrada fixo — em arestas que o usuário ajustou manualmente no
+    // app (data.manualRouting === true). Para as demais, coordenadas
+    // absolutas congeladas no momento da exportação travavam o traçado: ao
+    // mover qualquer forma no Draw.io, a linha ia direto (em diagonal,
+    // cortando por cima de tudo) até o ponto antigo, em vez de se
+    // re-rotear. Ver getDrawioEdgeStyle para o motivo de também soltar o
+    // ponto fixo de saída/entrada nesse caso.
     const isManual = e.data?.manualRouting === true;
+    const style = getDrawioEdgeStyle(e, isManual);
     const controlPoints: Point[] = isManual && Array.isArray(e.data?.controlPoints) ? e.data.controlPoints : [];
     let geometry = '<mxGeometry relative="1" as="geometry">';
     if (controlPoints.length > 0) {
@@ -247,4 +257,216 @@ export function generateBpmnXml(nodes: any[], edges: any[]): string {
     `<bpmndi:BPMNDiagram id="BPMNDiagram_1"><bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1">${shapes}${bpmnEdges}</bpmndi:BPMNPlane></bpmndi:BPMNDiagram>` +
     '</bpmn:definitions>'
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Bizagi Modeler (.bpm)                                                */
+/* ------------------------------------------------------------------ */
+/**
+ * O Bizagi Modeler NÃO abre um .bpmn (BPMN 2.0 XML padrão) como modelo
+ * nativo — ele salva/abre no próprio formato .bpm: um ZIP contendo um
+ * "Diagram.xml" em XPDL 2.2 (o dialeto XML que o Bizagi usa por baixo,
+ * declarado com o namespace http://www.wfmc.org/2009/XPDL2.2), dentro de
+ * OUTRO zip (o arquivo "<guid>.diag"), mais alguns arquivos auxiliares que o
+ * Bizagi sempre espera encontrar. Essa estrutura foi obtida abrindo um
+ * arquivo .bpm real exportado pelo próprio Bizagi Modeler e inspecionando
+ * seu conteúdo — os arquivos auxiliares (ModelInfo.xml, Participants.xml,
+ * Preferences.bpp, Actions.xml, BPSimData.xml, BPSimDataResult.xml e as
+ * preferências de usuário) são só metadados/boilerplate que o Bizagi grava
+ * sempre da mesma forma, reproduzidos aqui como estão.
+ */
+
+interface BizagiBox extends Box {}
+
+// Formato de cor do Bizagi: inteiro ARGB (alpha sempre 0xFF) interpretado
+// como int32 COM SINAL — por isso os valores gravados no arquivo real são
+// sempre negativos (o bit de alpha ligado vira o bit de sinal).
+const hexToBizagiColor = (hex: string): number => {
+  const clean = (hex || '#000000').replace('#', '');
+  const r = parseInt(clean.substring(0, 2), 16) || 0;
+  const g = parseInt(clean.substring(2, 4), 16) || 0;
+  const b = parseInt(clean.substring(4, 6), 16) || 0;
+  return ((0xff << 24) | (r << 16) | (g << 8) | b) | 0;
+};
+
+const BIZAGI_COLORS: Record<string, { fill: string; border: string }> = {
+  start: { fill: '#E6FF97', border: '#62A716' },
+  end: { fill: '#FADBD8', border: '#C0392B' },
+  decision: { fill: '#FFFFCC', border: '#A6A61D' },
+  task: { fill: '#ECEFFF', border: '#03689A' },
+};
+
+const uuid = (): string => {
+  if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
+    return (crypto as any).randomUUID();
+  }
+  // Fallback (só entra em uso em navegadores muito antigos sem crypto.randomUUID).
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
+const bizagiActivityBody = (node: any, box: BizagiBox): string => {
+  const override = node.data?.styleOverride || {};
+  let colorKey = 'task';
+  if (node.type === 'start') colorKey = 'start';
+  else if (node.type === 'end') colorKey = 'end';
+  else if (node.type === 'decision') colorKey = 'decision';
+  const defaults = BIZAGI_COLORS[colorKey];
+  const fillColor = hexToBizagiColor(override.backgroundColor || defaults.fill);
+  const borderColor = hexToBizagiColor(override.borderColor || defaults.border);
+
+  const graphics =
+    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${Math.round(box.height)}" Width="${Math.round(box.width)}" BorderColor="${borderColor}" FillColor="${fillColor}" BorderVisible="false">` +
+    `<Coordinates XCoordinate="${Math.round(box.x)}" YCoordinate="${Math.round(box.y)}" />` +
+    '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>8</SizeFont><Bold>false</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>' +
+    '<TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos>';
+
+  if (node.type === 'start') {
+    return `<Description /><Event><StartEvent Trigger="None" /></Event><Documentation />${graphics}<ExtendedAttributes><ExtendedAttribute Name="RuntimeProperties" Value="{}" /></ExtendedAttributes>`;
+  }
+  if (node.type === 'end') {
+    return `<Description /><Event><EndEvent Result="None" /></Event><Documentation />${graphics}<ExtendedAttributes><ExtendedAttribute Name="RuntimeProperties" Value="{}" /></ExtendedAttributes>`;
+  }
+  if (node.type === 'decision') {
+    return `<Description /><Route /><Documentation />${graphics}<ExtendedAttributes />`;
+  }
+  // Qualquer outra forma (processo, documento, banco de dados, subprocesso,
+  // etc.) vira uma Tarefa genérica — o Bizagi não tem paleta nativa
+  // equivalente a todas as formas de fluxograma que o app suporta.
+  return `<Description /><Implementation><Task /></Implementation><Performers /><Documentation /><Loop LoopType="None" />${graphics}<ExtendedAttributes />`;
+};
+
+export async function generateBizagiBpm(nodes: any[], edges: any[], title: string): Promise<Blob> {
+  const JSZipModule: any = await import('jszip');
+  const JSZip = JSZipModule.default || JSZipModule;
+
+  const flowNodes = nodes.filter((n) => n.type !== 'swimlane' && n.type !== 'frame' && n.type !== 'junction');
+  const idMap = new Map<string, string>();
+  flowNodes.forEach((n) => idMap.set(n.id, uuid()));
+
+  // XPDL grava as formas em coordenadas absolutas dentro do espaço do
+  // próprio "pool" que as contém — desloca tudo para caber com uma margem
+  // pequena a partir de (30,30), igual ao que o Bizagi Modeler grava.
+  const boxes = flowNodes.map((n) => getNodeBox(n));
+  const minX = boxes.length ? Math.min(...boxes.map((b) => b.x)) : 0;
+  const minY = boxes.length ? Math.min(...boxes.map((b) => b.y)) : 0;
+  const maxX = boxes.length ? Math.max(...boxes.map((b) => b.x + b.width)) : 700;
+  const maxY = boxes.length ? Math.max(...boxes.map((b) => b.y + b.height)) : 350;
+  const MARGIN = 50;
+  const offsetX = (v: number) => v - minX + MARGIN;
+  const offsetY = (v: number) => v - minY + MARGIN;
+
+  const poolWidth = Math.max(200, maxX - minX + MARGIN * 2);
+  const poolHeight = Math.max(150, maxY - minY + MARGIN * 2);
+
+  let activitiesXml = '';
+  flowNodes.forEach((n) => {
+    const box = getNodeBox(n);
+    const offsetBox: BizagiBox = { x: offsetX(box.x), y: offsetY(box.y), width: box.width, height: box.height };
+    const label = xmlEscape(n.data?.label || '');
+    activitiesXml += `<Activity Id="${idMap.get(n.id)}" Name="${label}">${bizagiActivityBody(n, offsetBox)}</Activity>`;
+  });
+
+  const nodeById = new Map(flowNodes.map((n) => [n.id, n]));
+  let transitionsXml = '';
+  edges.forEach((e) => {
+    const sourceId = idMap.get(e.source);
+    const targetId = idMap.get(e.target);
+    // Ponta numa raia/quadro/junção não tem Activity correspondente — sem
+    // isso o From/To apontaria pra um Id inexistente, o mesmo tipo de XML
+    // inválido que quebrava a importação BPMN.
+    if (!sourceId || !targetId) return;
+
+    const source = nodeById.get(e.source);
+    const target = nodeById.get(e.target);
+    const sBox = getNodeBox(source);
+    const tBox = getNodeBox(target);
+    const sCenter = { x: offsetX(sBox.x + sBox.width / 2), y: offsetY(sBox.y + sBox.height / 2) };
+    const tCenter = { x: offsetX(tBox.x + tBox.width / 2), y: offsetY(tBox.y + tBox.height / 2) };
+    const controlPoints: Point[] = Array.isArray(e.data?.controlPoints)
+      ? e.data.controlPoints.map((p: Point) => ({ x: offsetX(p.x), y: offsetY(p.y) }))
+      : [];
+    const waypoints = [sCenter, ...controlPoints, tCenter];
+    const coords = waypoints.map((p) => `<Coordinates XCoordinate="${Math.round(p.x)}" YCoordinate="${Math.round(p.y)}" />`).join('');
+
+    // FromPort/ToPort (o lado exato da conexão) ficam de fora de propósito
+    // — omitidos, o próprio Bizagi calcula o lado mais próximo sozinho,
+    // recalculado a cada movimento (mesmo raciocínio da correção no
+    // Draw.io: um ponto fixo trava o traçado quando a forma se move).
+    const nameAttr = e.label ? ` Name="${xmlEscape(e.label)}"` : '';
+    transitionsXml +=
+      `<Transition Id="${uuid()}" From="${sourceId}" To="${targetId}"${nameAttr}><Condition /><Description />` +
+      '<ConnectorGraphicsInfos><ConnectorGraphicsInfo ToolId="BizAgi_Process_Modeler" BorderColor="-16777216">' +
+      '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>8</SizeFont><Bold>false</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>' +
+      `<TextDirection xsi:nil="true" />${coords}</ConnectorGraphicsInfo></ConnectorGraphicsInfos><ExtendedAttributes /></Transition>`;
+  });
+
+  const mainProcessId = uuid();
+  const mainPoolId = uuid();
+  const visibleProcessId = uuid();
+  const visiblePoolId = uuid();
+  const diagramId = uuid();
+  const now = new Date().toISOString();
+  const safeTitle = xmlEscape(title || 'Fluxograma');
+
+  const diagramXml =
+    '<?xml version="1.0"?>' +
+    `<Package xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" OnlyOneProcess="false" Id="${diagramId}" Name="${safeTitle}" xmlns="http://www.wfmc.org/2009/XPDL2.2">` +
+    `<PackageHeader><XPDLVersion>2.2</XPDLVersion><Vendor>Bizagi Process Modeler.</Vendor><Created>${now}</Created><ModificationDate>${now}</ModificationDate><Description>${safeTitle}</Description><Documentation /><CreationVersion>4.0.0.014</CreationVersion><Version>4.0.0.014</Version><Modifications /></PackageHeader>` +
+    '<RedefinableHeader><Author>Labirinto</Author><Version>1.0</Version><Countrykey>BR</Countrykey></RedefinableHeader>' +
+    '<ExternalPackages />' +
+    '<Pools>' +
+    `<Pool Id="${mainPoolId}" Name="Processo principal" Process="${mainProcessId}" BoundaryVisible="false"><Lanes /><NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="0" Width="0" BorderColor="-16777216" FillColor="-1"><Coordinates XCoordinate="30" YCoordinate="30" /><Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>10</SizeFont><Bold>true</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting><TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos></Pool>` +
+    `<Pool Id="${visiblePoolId}" Name="${safeTitle}" Process="${visibleProcessId}" BoundaryVisible="true"><Lanes /><NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${Math.round(poolHeight)}" Width="${Math.round(poolWidth)}" BorderColor="-16777216" FillColor="-1"><Coordinates XCoordinate="30" YCoordinate="30" /><Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>10</SizeFont><Bold>true</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting><TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos></Pool>` +
+    '</Pools>' +
+    '<WorkflowProcesses>' +
+    `<WorkflowProcess Id="${mainProcessId}" Name="Processo principal"><ProcessHeader><Created>${now}</Created><Description /></ProcessHeader><RedefinableHeader><Author /><Version /><Countrykey>BR</Countrykey></RedefinableHeader><ActivitySets /><DataInputOutputs /><ExtendedAttributes /></WorkflowProcess>` +
+    `<WorkflowProcess Id="${visibleProcessId}" Name="${safeTitle}"><ProcessHeader><Created>${now}</Created><Description /></ProcessHeader><RedefinableHeader><Author /><Version /><Countrykey>BR</Countrykey></RedefinableHeader><ActivitySets /><DataInputOutputs /><Activities>${activitiesXml}</Activities><Transitions>${transitionsXml}</Transitions><ExtendedAttributes /></WorkflowProcess>` +
+    '</WorkflowProcesses>' +
+    '<ExtendedAttributes />' +
+    '</Package>';
+
+  // O .diag interno é um ZIP à parte com o Diagram.xml de verdade mais três
+  // arquivos auxiliares que o Bizagi sempre espera encontrar (mesmo vazios).
+  const diagZip = new JSZip();
+  diagZip.file('Diagram.xml', diagramXml);
+  diagZip.file(
+    'Actions.xml',
+    '<?xml version="1.0"?><DiagramActions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" />'
+  );
+  diagZip.file(
+    'BPSimData.xml',
+    `<?xml version="1.0"?><ns1:BPSimData simulationLevel="LevelOne" xmlns:ns1="http://www.bpsim.org/schemas/1.0"><ns1:Scenario id="Scenario_${uuid()}" name="Cenário 1" author="Labirinto" version="1.0"><ns1:ScenarioParameters /></ns1:Scenario></ns1:BPSimData>`
+  );
+  diagZip.file('BPSimDataResult.xml', '<?xml version="1.0" encoding="utf-8"?><ScenarioResults />');
+  const diagBlob = await diagZip.generateAsync({ type: 'blob' });
+
+  const bpmZip = new JSZip();
+  bpmZip.file(`${diagramId}.diag`, diagBlob);
+  bpmZip.file(
+    'ModelInfo.xml',
+    `<?xml version="1.0"?><BizAgiModelInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" CreationVersion="4.0.0.014" FilePersistenceVersion="5" ModifiedVersion="4.0.0.014" ModifiedDate="${now}" IsInCollaboration="false" />`
+  );
+  bpmZip.file(
+    'Participants.xml',
+    '<?xml version="1.0"?><Participants xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.wfmc.org/2009/XPDL2.2" />'
+  );
+  bpmZip.file('Preferences.bpp', '<?xml version="1.0" encoding="utf-8"?><ProjectPreferences><VersionFile version="3" /></ProjectPreferences>');
+  bpmZip.file(
+    'Users/Default/DocumentationSettings.xml',
+    '<?xml version="1.0"?><DocumentationSettings xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><SourceType>User</SourceType><ExportBPMNAttachments>false</ExportBPMNAttachments><ShapeFilters /><RoleFiltersString>{}</RoleFiltersString><SelectedDiagrams /><htmlFolderHierarchy xsi:nil="true" /><Settings /></DocumentationSettings>'
+  );
+  bpmZip.file(
+    'Users/Default/PrintingPreferences.xml',
+    '<?xml version="1.0"?><PrintingPreferences xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" AutoFitToPagesWidth="0" ScaleFactor="1"><Margins Bottom="0" Top="0" Left="0" Right="0" /><Watermark ImageTiling="false" ImageTransparency="0" TextTransparency="0" ShowBehind="false" /></PrintingPreferences>'
+  );
+  bpmZip.file(
+    'Users/Default/UserPreferences.xml',
+    `<?xml version="1.0"?><UserPreferences xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><OpenedItems><ModelItem ItemType="Diagram" DiagramId="${diagramId}" IsSelected="true" /></OpenedItems></UserPreferences>`
+  );
+
+  return bpmZip.generateAsync({ type: 'blob' });
 }

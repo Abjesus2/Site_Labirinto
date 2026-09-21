@@ -25,7 +25,7 @@ const edges = [
   // controlPoints preenchido pelo próprio roteador do app — o mesmo formato
   // de uma aresta comum, não ajustada manualmente pelo usuário.
   {
-    id: 'e3', source: 'n1', target: 'n3', type: 'smoothstep', style: { stroke: '#0f172a' },
+    id: 'e3', source: 'n1', target: 'n3', sourceHandle: 'right', targetHandle: 'left', type: 'smoothstep', style: { stroke: '#0f172a' },
     data: { manualRouting: false, controlPoints: [{ x: 250, y: 100 }, { x: 250, y: 200 }] },
   },
   // Ponta presa numa junção (linha independente sem forma real do outro
@@ -63,6 +63,11 @@ check(
   !/id="e3".*?<Array as="points">/.test(drawio.slice(drawio.indexOf('id="e3"'), drawio.indexOf('id="e3"') + 400))
 );
 check('aresta roteada automaticamente ainda usa edgeStyle ortogonal', /id="e3"[^>]*style="[^"]*edgeStyle=orthogonalEdgeStyle;/.test(drawio));
+check(
+  'aresta roteada automaticamente NÃO leva ponto de saída/entrada fixo (mesmo tendo sourceHandle/targetHandle) — conexão flutuante, o Draw.io escolhe o lado sozinho e recalcula ao mover',
+  !/id="e3"[^>]*style="[^"]*exitX=/.test(drawio)
+);
+check('aresta roteada automaticamente ganha jettySize/orthogonalLoop (mais robustez contra o mxGraph "colapsar" pra linha reta)', /id="e3"[^>]*style="[^"]*orthogonalLoop=1;jettySize=auto;/.test(drawio));
 
 const bpmn = generateBpmnXml(nodes, edges);
 check('bpmn bem formado', bpmn.startsWith('<?xml') && bpmn.endsWith('</bpmn:definitions>'));

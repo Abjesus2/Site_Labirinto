@@ -90,7 +90,7 @@ import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
 import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX } from '../utils/sectorContainers';
-import { generateDrawioXml, generateBpmnXml } from '../utils/exportFormats';
+import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
 import { buildPrompt as buildManualAIPrompt } from '../lib/aiBrowserBridge';
 import { MiroEdgeToolbar } from './MiroEdgeToolbar';
@@ -1091,52 +1091,64 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const selectedNodes = nodes.filter((n) => n.selected);
       if (selectedNodes.length < 2) return;
 
-      let targetValue = 0;
-      if (mode === 'left') targetValue = Math.min(...selectedNodes.map((n) => n.position.x));
-      if (mode === 'right') {
-        const maxRight = Math.max(...selectedNodes.map((n) => n.position.x + (n.measured?.width || 180)));
-        selectedNodes.forEach((n) => {
-          n.position.x = maxRight - (n.measured?.width || 180);
-        });
-      }
-      if (mode === 'center-h') {
-        const avgX =
-          selectedNodes.reduce((acc, n) => acc + n.position.x + (n.measured?.width || 180) / 2, 0) /
-          selectedNodes.length;
-        selectedNodes.forEach((n) => {
-          n.position.x = Math.round(avgX - (n.measured?.width || 180) / 2);
-        });
-      }
-      if (mode === 'top') targetValue = Math.min(...selectedNodes.map((n) => n.position.y));
-      if (mode === 'bottom') {
-        const maxBottom = Math.max(...selectedNodes.map((n) => n.position.y + (n.measured?.height || 60)));
-        selectedNodes.forEach((n) => {
-          n.position.y = maxBottom - (n.measured?.height || 60);
-        });
-      }
-      if (mode === 'center-v') {
-        const avgY =
-          selectedNodes.reduce((acc, n) => acc + n.position.y + (n.measured?.height || 60) / 2, 0) /
-          selectedNodes.length;
-        selectedNodes.forEach((n) => {
-          n.position.y = Math.round(avgY - (n.measured?.height || 60) / 2);
-        });
+      const getW = (n: Node) => (n.measured?.width as number) || 180;
+      const getH = (n: Node) => (n.measured?.height as number) || 60;
+
+      // Antes, os modos 'right'/'center-h'/'bottom'/'center-v' calculavam a
+      // nova posição mutando n.position.x/y DIRETO nos objetos de nós
+      // selecionados — que são as MESMAS referências guardadas no estado
+      // "nodes" (nodes.filter não clona nada). Mutar o estado do React por
+      // fora do setState é um comportamento indefinido (outras partes do
+      // app podiam ler a posição "do futuro" antes do React re-renderizar).
+      // Agora cada modo só calcula uma função pura de nova posição.
+      let computeX: ((n: Node) => number) | null = null;
+      let computeY: ((n: Node) => number) | null = null;
+
+      if (mode === 'left') {
+        const minX = Math.min(...selectedNodes.map((n) => n.position.x));
+        computeX = () => minX;
+      } else if (mode === 'right') {
+        const maxRight = Math.max(...selectedNodes.map((n) => n.position.x + getW(n)));
+        computeX = (n) => maxRight - getW(n);
+      } else if (mode === 'center-h') {
+        const avgX = selectedNodes.reduce((acc, n) => acc + n.position.x + getW(n) / 2, 0) / selectedNodes.length;
+        computeX = (n) => Math.round(avgX - getW(n) / 2);
       }
 
-      setNodes((prevNodes) => {
-        const selectedIds = new Set(selectedNodes.map((n) => n.id));
-        const updated = prevNodes.map((n) => {
-          if (!selectedIds.has(n.id)) return n;
-          const match = selectedNodes.find((sn) => sn.id === n.id);
-          if (mode === 'left') return { ...n, position: { ...n.position, x: targetValue } };
-          if (mode === 'top') return { ...n, position: { ...n.position, y: targetValue } };
-          if (match) return { ...n, position: { ...match.position } };
-          return n;
-        });
-        pushHistory(updated, edges, `Alinhou elementos (${mode})`);
-        saveToCloud(activeVersion, updated, edges);
-        return updated;
+      if (mode === 'top') {
+        const minY = Math.min(...selectedNodes.map((n) => n.position.y));
+        computeY = () => minY;
+      } else if (mode === 'bottom') {
+        const maxBottom = Math.max(...selectedNodes.map((n) => n.position.y + getH(n)));
+        computeY = (n) => maxBottom - getH(n);
+      } else if (mode === 'center-v') {
+        const avgY = selectedNodes.reduce((acc, n) => acc + n.position.y + getH(n) / 2, 0) / selectedNodes.length;
+        computeY = (n) => Math.round(avgY - getH(n) / 2);
+      }
+
+      const selectedIds = new Set(selectedNodes.map((n) => n.id));
+      const nextNodes = nodes.map((n) => {
+        if (!selectedIds.has(n.id)) return n;
+        return {
+          ...n,
+          position: {
+            x: computeX ? computeX(n) : n.position.x,
+            y: computeY ? computeY(n) : n.position.y
+          }
+        };
       });
+
+      // Alinhar move as formas diretamente via setNodes, sem passar pelo
+      // onNodesChange/applyNodeChanges que o arraste normal usa — por isso
+      // as linhas conectadas nunca eram re-roteadas, ficando presas na
+      // rota antiga (feita para a posição de antes do alinhamento). Chamar
+      // recomputeEdgeRoutingForNodes aqui replica o que o arraste já fazia.
+      const nextEdges = recomputeEdgeRoutingForNodes(edges, nextNodes, selectedIds);
+
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      pushHistory(nextNodes, nextEdges, `Alinhou elementos (${mode})`);
+      saveToCloud(activeVersion, nextNodes, nextEdges);
     };
 
     const handleDistributeNodes = (e: any) => {
@@ -1144,34 +1156,37 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const selectedNodes = [...nodes.filter((n) => n.selected)];
       if (selectedNodes.length < 3) return;
 
+      const positionById = new Map<string, { x: number; y: number }>();
+
       if (mode === 'horizontal') {
-        selectedNodes.sort((a, b) => a.position.x - b.position.x);
-        const minX = selectedNodes[0].position.x;
-        const maxX = selectedNodes[selectedNodes.length - 1].position.x;
-        const step = (maxX - minX) / (selectedNodes.length - 1);
-        selectedNodes.forEach((n, idx) => {
-          n.position.x = Math.round(minX + step * idx);
-        });
+        const sorted = [...selectedNodes].sort((a, b) => a.position.x - b.position.x);
+        const minX = sorted[0].position.x;
+        const maxX = sorted[sorted.length - 1].position.x;
+        const step = (maxX - minX) / (sorted.length - 1);
+        sorted.forEach((n, idx) => positionById.set(n.id, { x: Math.round(minX + step * idx), y: n.position.y }));
       } else if (mode === 'vertical') {
-        selectedNodes.sort((a, b) => a.position.y - b.position.y);
-        const minY = selectedNodes[0].position.y;
-        const maxY = selectedNodes[selectedNodes.length - 1].position.y;
-        const step = (maxY - minY) / (selectedNodes.length - 1);
-        selectedNodes.forEach((n, idx) => {
-          n.position.y = Math.round(minY + step * idx);
-        });
+        const sorted = [...selectedNodes].sort((a, b) => a.position.y - b.position.y);
+        const minY = sorted[0].position.y;
+        const maxY = sorted[sorted.length - 1].position.y;
+        const step = (maxY - minY) / (sorted.length - 1);
+        sorted.forEach((n, idx) => positionById.set(n.id, { x: n.position.x, y: Math.round(minY + step * idx) }));
       }
 
-      setNodes((prevNodes) => {
-        const selectedMap = new Map(selectedNodes.map((n) => [n.id, n]));
-        const updated = prevNodes.map((n) => {
-          const match = selectedMap.get(n.id);
-          return match ? { ...n, position: { ...match.position } } : n;
-        });
-        pushHistory(updated, edges, `Distribuiu elementos (${mode})`);
-        saveToCloud(activeVersion, updated, edges);
-        return updated;
+      const selectedIds = new Set(selectedNodes.map((n) => n.id));
+      const nextNodes = nodes.map((n) => {
+        const pos = positionById.get(n.id);
+        return pos ? { ...n, position: pos } : n;
       });
+
+      // Mesmo motivo do handleAlignNodes: distribuir também move formas por
+      // fora do onNodesChange, então precisa recalcular a rota das linhas
+      // conectadas manualmente.
+      const nextEdges = recomputeEdgeRoutingForNodes(edges, nextNodes, selectedIds);
+
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      pushHistory(nextNodes, nextEdges, `Distribuiu elementos (${mode})`);
+      saveToCloud(activeVersion, nextNodes, nextEdges);
     };
 
     const handleNodeResizeEnd = (e: any) => {
@@ -2818,7 +2833,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // getNodesBounds + getViewportForBounds para montar um enquadramento que
   // sempre cabe o fluxo inteiro, na resolução calculada a partir do próprio
   // tamanho do conteúdo (não do zoom atual da tela).
-  const EXPORT_MAX_DIMENSION = 4096; // trava de segurança p/ fluxos enormes não travarem o navegador
+  // 4096 deixava fluxogramas grandes (muitas etapas, canvas largo) com texto
+  // borrado ao dar zoom na imagem exportada — o fluxo inteiro precisa caber
+  // nesses pixels, então quanto maior o fluxo, menor o "tamanho" de cada
+  // etapa na imagem final. 8192 dobra o lado (4x a área) mantendo folga
+  // segura abaixo do limite físico de canvas dos navegadores (16384px).
+  const EXPORT_MAX_DIMENSION = 8192;
   const EXPORT_PADDING = 48;
 
   const captureFlowDataUrl = useCallback(async (format: 'png' | 'svg'): Promise<string | null> => {
@@ -3062,6 +3082,22 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
     a.setAttribute('href', url);
     a.click();
   };
+
+  // .bpm nativo do Bizagi Modeler — diferente do .bpmn (BPMN 2.0 XML
+  // padrão), que o Bizagi só aceita via um caminho específico de
+  // importação (Export/Import → Importar BPMN), não abrindo direto como
+  // modelo nativo. O .bpm abre normal, do jeito que os arquivos salvos
+  // pelo próprio Bizagi abrem.
+  const exportBizagi = () => runExport('Gerando arquivo para o Bizagi...', async () => {
+    const blob = await generateBizagiBpm(nodes, edges, title);
+    if (exportCancelledRef.current) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('download', `${title || 'fluxograma'}.bpm`);
+    a.setAttribute('href', url);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
 
   const exportJson = () => {
     const jsonStr = JSON.stringify({ title, versions }, null, 2);
@@ -3609,6 +3645,14 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                   >
                     <span>Padrão BPMN 2.0</span>
                     <span className="text-[10px] text-zinc-400">.bpmn</span>
+                  </button>
+                  <button
+                    onClick={() => { exportBizagi(); setShowExportMenu(false); }}
+                    className="w-full px-4 py-2 text-left font-medium text-zinc-700 hover:bg-zinc-50 flex items-center justify-between"
+                    title="Formato nativo do Bizagi Modeler — abre direto, como um arquivo salvo pelo próprio Bizagi"
+                  >
+                    <span>Bizagi Modeler</span>
+                    <span className="text-[10px] text-zinc-400">.bpm</span>
                   </button>
                 </div>
               </>
