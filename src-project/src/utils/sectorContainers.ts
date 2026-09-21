@@ -45,6 +45,33 @@ export function normalizeContainerZIndex(nodes: Node[]): Node[] {
   });
 }
 
+/**
+ * Mantém raias (e, separadamente, quadros) alinhadas entre si: mesma borda
+ * esquerda e mesma largura, como no layout de referência (raias empilhadas,
+ * bordas e larguras idênticas). Chamado depois que o usuário termina de
+ * arrastar ou redimensionar uma raia/quadro — todas as outras do MESMO tipo
+ * (raia com raia, quadro com quadro, sem misturar) acompanham a que acabou
+ * de ser ajustada. Y/altura de cada uma continuam livres (não empilha
+ * automaticamente, só alinha X e largura).
+ */
+export function alignContainerSiblings(nodes: Node[], movedNodeId: string): Node[] {
+  const movedNode = nodes.find((n) => n.id === movedNodeId);
+  if (!movedNode || (movedNode.type !== 'swimlane' && movedNode.type !== 'frame')) return nodes;
+
+  const movedBox = getSectorNodeBox(movedNode);
+  const hasSiblings = nodes.some((n) => n.id !== movedNodeId && n.type === movedNode.type);
+  if (!hasSiblings) return nodes;
+
+  return nodes.map((n) => {
+    if (n.id === movedNodeId || n.type !== movedNode.type) return n;
+    return {
+      ...n,
+      position: { ...n.position, x: movedBox.x },
+      style: { ...(n.style || {}), width: movedBox.width },
+    };
+  });
+}
+
 const getSectorNodeBox = (node: Node): { x: number; y: number; width: number; height: number } => {
   const dim = getNodeDimensions(node.type);
   const width = (node.measured?.width as number) || (node.width as number) || (node.style?.width as number) || dim.width;

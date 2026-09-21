@@ -90,7 +90,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { NavigationModeContext } from '../lib/navigationMode';
 import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
@@ -770,6 +770,15 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, []);
 
   const onNodeDragStop = useCallback((_: any, node: Node) => {
+    if (node.type === 'swimlane' || node.type === 'frame') {
+      const alignedNodes = alignContainerSiblings(nodes, node.id);
+      if (alignedNodes !== nodes) {
+        setNodes(alignedNodes);
+        pushHistory(alignedNodes, edges, 'Moveu elemento');
+        saveToCloud(activeVersion, alignedNodes, edges);
+        return;
+      }
+    }
     pushHistory(nodes, edges, 'Moveu elemento');
     saveToCloud(activeVersion, nodes, edges);
   }, [nodes, edges, activeVersion, pushHistory, saveToCloud]);
@@ -927,6 +936,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       return {
         ...node,
         zIndex: resolvedZ,
+        // Raia/Quadro só arrasta pela barra superior (nome) ou pelas bordas
+        // — nunca clicando no corpo/interior, pra não roubar clique de quem
+        // está por dentro (outros nós ou o canvas).
+        dragHandle: isContainer ? '.lane-drag-handle' : node.dragHandle,
         data: {
           ...node.data,
           calculatedTiming: timingCalc,
@@ -939,6 +952,11 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // Derived Selection States
   const selectedNodesList = useMemo(() => nodes.filter(n => n.selected && n.type !== 'junction'), [nodes]);
   const selectedEdgesList = useMemo(() => edges.filter(e => e.selected || e.id === selectedEdge?.id), [edges, selectedEdge]);
+  // Enquanto uma linha está selecionada (pronta pra reconectar), os pontos de
+  // conexão "+" das formas ficam desativados: eles apareciam bem em cima da
+  // alça de reconexão da linha e roubavam o clique, impedindo arrastar a
+  // ponta da seta para outra forma.
+  const hasSelectedEdge = edges.some(e => e.selected) || !!selectedEdge;
   const currentlySelectedNode = selectedNodesList.length > 0 ? selectedNodesList[0] : null;
   const hasActiveSelection = selectedNodesList.length > 0 || selectedEdgesList.length > 0;
 
@@ -1220,7 +1238,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     const handleNodeResizeEnd = (e: any) => {
       const { id, width, height } = e.detail;
       setNodes((prevNodes) => {
-        const updated = prevNodes.map((n) => {
+        let updated = prevNodes.map((n) => {
           if (n.id === id) {
             // O tamanho pertence ao nó (style), não ao styleOverride: guardar
             // largura/altura lá dentro fazia o rótulo virar um bloco colorido.
@@ -1238,6 +1256,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           }
           return n;
         });
+        // Redimensionar uma raia/quadro mantém as outras do mesmo tipo com a
+        // mesma largura e borda esquerda (alinhadas como na imagem de referência).
+        updated = alignContainerSiblings(updated, id);
         pushHistory(updated, edges, 'Redimensionou elemento');
         saveToCloud(activeVersion, updated, edges);
         return updated;
@@ -1919,7 +1940,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   );
 
   const handleAddNode = (type: string, initialData?: Record<string, any>) => {
-    const position = {
+    let position = {
       x: 300 + (nodes.length % 5) * 40,
       y: 200 + (nodes.length % 5) * 40,
     };
@@ -1943,6 +1964,28 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     const isContainer = type === 'swimlane' || type === 'frame';
 
+    let containerStyle = {
+      width: type === 'swimlane' ? 800 : 600,
+      height: type === 'swimlane' ? 200 : 400,
+    };
+
+    // Nova raia/quadro nasce já alinhada com as do mesmo tipo (mesma borda
+    // esquerda e largura), empilhada logo abaixo da última — como no layout
+    // de referência — em vez de cair numa posição/tamanho independente que
+    // o usuário teria de ajustar manualmente depois.
+    if (isContainer) {
+      const siblings = nodes.filter((n) => n.type === type);
+      if (siblings.length > 0) {
+        const first = siblings[0];
+        const firstWidth = (first.measured?.width as number) || (first.style?.width as number) || containerStyle.width;
+        const lastBottom = Math.max(
+          ...siblings.map((n) => n.position.y + ((n.measured?.height as number) || (n.style?.height as number) || containerStyle.height))
+        );
+        position = { x: first.position.x, y: lastBottom + 16 };
+        containerStyle = { ...containerStyle, width: firstWidth };
+      }
+    }
+
     const newNode: Node = {
       id: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       type,
@@ -1951,12 +1994,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       // propriedade de topo do nó, não de "style", para o React Flow
       // realmente respeitar a ordem de empilhamento.
       zIndex: isContainer ? CONTAINER_BASE_Z_INDEX : undefined,
-      style: isContainer
-        ? {
-            width: type === 'swimlane' ? 800 : 600,
-            height: type === 'swimlane' ? 200 : 400,
-          }
-        : undefined,
+      style: isContainer ? containerStyle : undefined,
       data: {
         label: initialData?.label || defaultLabels[type] || 'Elemento',
         styleOverride: initialData?.styleOverride || {},
@@ -4031,7 +4069,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               markerEnd: { type: MarkerType.ArrowClosed, color: '#0f172a' },
               style: { stroke: '#0f172a', strokeWidth: 2 }
             }}
-            className={`bg-zinc-50 ${isConnecting ? "is-connecting" : ""} ${isNavigationMode ? "cursor-default" : ""}`}
+            className={`bg-zinc-50 ${isConnecting ? "is-connecting" : ""} ${isNavigationMode ? "cursor-default" : ""} ${hasSelectedEdge ? "edge-selected-mode" : ""}`}
             style={isPlacingFreeEdge ? { cursor: FREE_EDGE_CURSOR } : undefined}
           >
             {/* Dot Grid */}

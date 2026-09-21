@@ -1,4 +1,4 @@
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX } from '../.tmp-sectorContainers.mjs';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings } from '../.tmp-sectorContainers.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -88,6 +88,40 @@ const proc = (id, x, y, dept) => ({
   const nodeBCenterX = 500 + 210 / 2; // 210 = largura padrão do tipo "process" (getNodeDimensions)
   const frameBCenterX = frameB.position.x + frameB.style.width / 2;
   check('quadro do setor menor fica centralizado sobre o próprio conteúdo', Math.abs(frameBCenterX - nodeBCenterX) < 1, `${frameBCenterX} vs ${nodeBCenterX}`);
+}
+
+// 6. alignContainerSiblings: mover/redimensionar uma raia mantém as outras
+//    raias (nunca os quadros) com a mesma borda esquerda e largura —
+//    layout de referência (raias empilhadas, mesmo X e largura).
+{
+  const nodes = [
+    { id: 'lane1', type: 'swimlane', position: { x: 0, y: 0 }, style: { width: 800, height: 200 }, data: { label: 'Picking' } },
+    { id: 'lane2', type: 'swimlane', position: { x: 40, y: 220 }, style: { width: 700, height: 180 }, data: { label: 'Coleta' } },
+    { id: 'lane3', type: 'swimlane', position: { x: -20, y: 420 }, style: { width: 900, height: 160 }, data: { label: 'Embalagem' } },
+    { id: 'frame1', type: 'frame', position: { x: 200, y: 0 }, style: { width: 300, height: 100 }, data: {} },
+    { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: { label: 'Processo' } },
+  ];
+  const result = alignContainerSiblings(nodes, 'lane1');
+  const lane2 = result.find((n) => n.id === 'lane2');
+  const lane3 = result.find((n) => n.id === 'lane3');
+  const frame1 = result.find((n) => n.id === 'frame1');
+  const n1 = result.find((n) => n.id === 'n1');
+  check('raia movida/redimensionada não muda a própria posição/tamanho', result.find((n) => n.id === 'lane1').position.x === 0 && result.find((n) => n.id === 'lane1').style.width === 800);
+  check('outras raias acompanham o X da raia ajustada', lane2.position.x === 0 && lane3.position.x === 0, `${lane2.position.x}, ${lane3.position.x}`);
+  check('outras raias acompanham a largura da raia ajustada', lane2.style.width === 800 && lane3.style.width === 800, `${lane2.style.width}, ${lane3.style.width}`);
+  check('outras raias mantêm o próprio Y/altura (não empilha automaticamente)', lane2.position.y === 220 && lane3.position.y === 420);
+  check('quadro (tipo diferente) não é mexido ao alinhar raias', frame1.position.x === 200 && frame1.style.width === 300);
+  check('nó de processo não é mexido', n1.position.x === 10);
+}
+
+// 7. Sem outras raias/quadros do mesmo tipo, não mexe em nada.
+{
+  const nodes = [
+    { id: 'lane1', type: 'swimlane', position: { x: 0, y: 0 }, style: { width: 800, height: 200 }, data: {} },
+    { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: {} },
+  ];
+  const result = alignContainerSiblings(nodes, 'lane1');
+  check('raia sozinha (sem irmãs) não gera nova referência do array', result === nodes);
 }
 
 console.log(R.join('\n'));

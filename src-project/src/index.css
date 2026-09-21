@@ -209,6 +209,35 @@ body.is-dragging-edge-handle .react-flow__node .react-flow__handle,
   background-color: #16a34a;
 }
 
+/* Com uma linha selecionada, os "+" de conexão rápida das formas ficam fora
+   do caminho: eles apareciam bem em cima da alça de reconectar a ponta da
+   seta e ganhavam o clique primeiro (área de acerto de 28px, hover em
+   qualquer parte da forma), impedindo arrastar a seta pra outra forma. */
+.edge-selected-mode .react-flow__node .react-flow__handle.multi-handle,
+.edge-selected-mode .react-flow__node .react-flow__handle.multi-handle::before {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Raia/Quadro: só a barra superior (nome) e as bordas arrastam/selecionam —
+   o corpo/interior fica "transparente" a clique, deixando passar direto
+   para nós ou o canvas por baixo. Precisa ser no PRÓPRIO wrapper do React
+   Flow (.react-flow__node-swimlane/-frame), não só no nosso <div> interno:
+   com pointer-events:none só no filho, o clique "cai" para o wrapper (que a
+   lib cria e continua com pointer-events:auto por padrão), que ainda conta
+   como clique no nó. */
+.react-flow__node-swimlane,
+.react-flow__node-frame {
+  /* !important necessário: o React Flow define pointer-events como inline
+     style no próprio wrapper (conforme nodesDraggable/selectable), que tem
+     prioridade sobre CSS externo sem !important. */
+  pointer-events: none !important;
+}
+
+.lane-drag-handle {
+  pointer-events: auto !important;
+}
+
 
 
 

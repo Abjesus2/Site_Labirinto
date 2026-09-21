@@ -115,7 +115,8 @@ export const EditableNodeLabel = ({
   className = '',
   style = {},
   isEditingManual,
-  onFinishEditing
+  onFinishEditing,
+  locked
 }: {
   nodeId: string;
   label: string;
@@ -124,6 +125,8 @@ export const EditableNodeLabel = ({
   style?: React.CSSProperties;
   isEditingManual?: boolean;
   onFinishEditing?: () => void;
+  /** Bloqueia a edição por clique duplo (ex.: raia/quadro só edita quando selecionado). */
+  locked?: boolean;
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [text, setText] = useState(label || '');
@@ -207,13 +210,13 @@ export const EditableNodeLabel = ({
   return (
     <div
       onDoubleClick={(e) => {
-        if (isNavigationMode) return;
+        if (isNavigationMode || locked) return;
         e.stopPropagation();
         setIsEditing(true);
       }}
-      className={`select-none w-full break-words ${isNavigationMode ? '' : 'cursor-text'} ${className}`}
+      className={`select-none w-full break-words ${isNavigationMode || locked ? '' : 'cursor-text'} ${className}`}
       style={mergedStyle}
-      title={isNavigationMode ? undefined : 'Clique duas vezes para editar o texto'}
+      title={isNavigationMode || locked ? undefined : 'Clique duas vezes para editar o texto'}
     >
       {text || <span className="opacity-40 italic">{placeholder}</span>}
     </div>
@@ -881,6 +884,20 @@ export const TextNode = ({ id, data, type, selected }: any) => {
   );
 };
 
+// Faixas invisíveis de 10px nas 4 bordas de raias/quadros — junto com a
+// barra superior, são a ÚNICA área que seleciona/arrasta o contêiner. O
+// corpo/interior fica "vazado" a clique (pointer-events: none no wrapper),
+// deixando passar direto para nós ou o canvas por baixo, em vez de a raia
+// roubar o clique de quem está por dentro dela.
+const ContainerBorderHandles = () => (
+  <>
+    <div className="lane-drag-handle absolute top-0 left-0 right-0 h-2.5 cursor-move" style={{ pointerEvents: 'auto' }} />
+    <div className="lane-drag-handle absolute bottom-0 left-0 right-0 h-2.5 cursor-move" style={{ pointerEvents: 'auto' }} />
+    <div className="lane-drag-handle absolute top-0 bottom-0 left-0 w-2.5 cursor-move" style={{ pointerEvents: 'auto' }} />
+    <div className="lane-drag-handle absolute top-0 bottom-0 right-0 w-2.5 cursor-move" style={{ pointerEvents: 'auto' }} />
+  </>
+);
+
 // Swimlane Node
 export const SwimlaneNode = ({ id, data, type, selected }: any) => {
   const isVertical = data.orientation === 'vertical' || data.styleOverride?.orientation === 'vertical';
@@ -894,7 +911,8 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
         backgroundColor: data.styleOverride?.backgroundColor || 'rgba(248, 250, 252, 0.65)',
         borderColor: data.styleOverride?.borderColor || (selected ? '#3b82f6' : '#cbd5e1'),
         borderStyle: data.styleOverride?.borderStyle || 'dashed',
-        ...pickBoxStyle(data.styleOverride)
+        ...pickBoxStyle(data.styleOverride),
+        pointerEvents: 'none'
       }}
     >
       <NodeResizer
@@ -905,21 +923,23 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
         handleClassName="w-3.5 h-3.5 bg-white border-2 border-blue-600 rounded-sm shadow-md z-50 hover:scale-125 transition-transform cursor-pointer"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
-      <div 
-        className="bg-zinc-100/90 border-b border-zinc-200/90 px-3.5 py-2 rounded-t-lg font-semibold text-xs text-zinc-700 flex items-center justify-between select-none shrink-0"
+      <ContainerBorderHandles />
+      <div
+        className="lane-drag-handle bg-zinc-100/90 border-b border-zinc-200/90 px-3.5 py-2 rounded-t-lg font-semibold text-xs text-zinc-700 flex items-center justify-between select-none shrink-0 cursor-move"
         style={{
           backgroundColor: data.styleOverride?.headerBg || undefined,
-          color: data.styleOverride?.headerColor || undefined
+          color: data.styleOverride?.headerColor || undefined,
+          pointerEvents: 'auto'
         }}
       >
         <div className="flex items-center gap-1.5 min-w-0 max-w-[80%]">
-          <EditableNodeLabel nodeId={id} label={data.label} placeholder="Nome da Raia / Responsável" />
+          <EditableNodeLabel nodeId={id} label={data.label} placeholder="Nome da Raia / Responsável" locked={!selected} />
         </div>
         <span className="text-[9.5px] text-zinc-400 uppercase tracking-wider font-semibold shrink-0">
           {isVertical ? 'Raia Vertical' : 'Raia de Processo'}
         </span>
       </div>
-      
+
       <div className="flex-1 w-full h-full p-2" />
     </div>
   );
@@ -935,7 +955,8 @@ export const FrameNode = ({ id, data, type, selected }: any) => {
       style={{
         backgroundColor: data.styleOverride?.backgroundColor || 'rgba(255, 255, 255, 0.45)',
         borderColor: data.styleOverride?.borderColor || (selected ? '#3b82f6' : '#94a3b8'),
-        ...pickBoxStyle(data.styleOverride)
+        ...pickBoxStyle(data.styleOverride),
+        pointerEvents: 'none'
       }}
     >
       <NodeResizer
@@ -946,14 +967,16 @@ export const FrameNode = ({ id, data, type, selected }: any) => {
         handleClassName="w-3.5 h-3.5 bg-white border-2 border-blue-600 rounded-sm shadow-md z-50 hover:scale-125 transition-transform cursor-pointer"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
+      <ContainerBorderHandles />
       <div
-        className="absolute top-2 left-2 right-2 px-3 py-1 bg-zinc-800 text-white rounded-md text-xs font-semibold shadow-md flex items-center gap-1.5 select-none z-10 max-w-[calc(100%-1rem)]"
+        className="lane-drag-handle absolute top-2 left-2 right-2 px-3 py-1 bg-zinc-800 text-white rounded-md text-xs font-semibold shadow-md flex items-center gap-1.5 select-none z-10 max-w-[calc(100%-1rem)] cursor-move"
         style={{
           backgroundColor: data.styleOverride?.headerBg || undefined,
-          color: data.styleOverride?.headerColor || undefined
+          color: data.styleOverride?.headerColor || undefined,
+          pointerEvents: 'auto'
         }}
       >
-        <EditableNodeLabel nodeId={id} label={data.label} placeholder="Quadro / Frame de Apresentação" />
+        <EditableNodeLabel nodeId={id} label={data.label} placeholder="Quadro / Frame de Apresentação" locked={!selected} />
       </div>
 
       <div className="w-full h-full p-3 pt-9" />

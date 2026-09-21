@@ -1,4 +1,4 @@
-export const APP_VERSION = 'v2.7.9';
+export const APP_VERSION = 'v2.7.10';
 
 export interface NodeTiming {
   duration?: number; // Tempo de execução principal em minutos
