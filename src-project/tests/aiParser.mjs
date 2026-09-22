@@ -1,4 +1,4 @@
-import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../.tmp-aiParser.mjs';
+import { applyGeneratedJsonlLine, parseGeneratedBlock, repairGeneratedVersion, fixDecisionExits } from '../.tmp-aiParser.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -74,6 +74,59 @@ const fallbackMap = (requestedType, allowed) => allowed[0] || 'process';
   const rawGenerated = { normal: { nodes: [], edges: [] } };
   applyGeneratedJsonlLine('{"version": "detalhado", "node": {"id": "n1", "label": "x", "type": "process"}}', rawGenerated, ['process'], fallbackMap);
   check('versao nao selecionada nao aparece em lugar nenhum', Object.keys(rawGenerated).length === 1 && rawGenerated.normal.nodes.length === 0);
+}
+
+// 5. Variações de formato que modelos mais fracos costumam mandar
+{
+  const rawGenerated = { detalhado: { nodes: [], edges: [] } };
+  applyGeneratedJsonlLine('{"version": "Detalhado", "node": {"id": "d1", "label": "A", "type": "process"}}', rawGenerated, ['process'], fallbackMap);
+  applyGeneratedJsonlLine('{"version": "detailed", "edge": {"from": "d1", "to": "d2"}}', rawGenerated, ['process'], fallbackMap);
+  check('versao com maiuscula/ingles cai na versao certa', rawGenerated.detalhado.nodes.length === 1 && rawGenerated.detalhado.edges.length === 1);
+  check('aresta com from/to vira source/target', rawGenerated.detalhado.edges[0].source === 'd1' && rawGenerated.detalhado.edges[0].target === 'd2');
+}
+
+// 6. IA que marca isDubious em quase tudo (cópia do exemplo): marcação removida
+{
+  const nodes = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id, type: 'process', data: {} }));
+  const mk = (s, t) => ({ id: s + t, source: s, target: t, label: 'Analise Conexão', style: { stroke: '#ef4444' }, data: { isDubious: true } });
+  const out = repairGeneratedVersion({ nodes, edges: [mk('a', 'b'), mk('b', 'c'), mk('c', 'd'), mk('d', 'e')] });
+  check('dubious em massa é desmarcado', out.edges.every((e) => !e.data.isDubious && e.style.stroke === '#0f172a' && e.label === ''), JSON.stringify(out.edges[0]));
+  check('relata quantas foram desmarcadas', out.report.clearedDubious === 4);
+
+  const poucas = repairGeneratedVersion({
+    nodes,
+    edges: [mk('a', 'b'), { id: 'x', source: 'b', target: 'c', data: {} }, { id: 'y', source: 'c', target: 'd', data: {} }, { id: 'z', source: 'd', target: 'e', data: {} }],
+  });
+  check('uma duvida real isolada continua marcada', poucas.edges[0].data.isDubious === true && poucas.report.clearedDubious === 0);
+
+  const semLigacao = repairGeneratedVersion({ nodes, edges: [{ id: 'q', source: 'a', target: 'nao_existe', data: {} }] });
+  check('detecta versao sem nenhuma ligacao valida (resposta cortada)', semLigacao.report.missingEdges === true && semLigacao.report.droppedEdges === 1);
+
+  const caixa = repairGeneratedVersion({ nodes, edges: [{ id: 'k', source: 'A ', target: 'b', data: {} }] });
+  check('id que so difere em maiuscula/espaco e casado', caixa.edges.length === 1 && caixa.edges[0].source === 'a');
+}
+
+// 7. Losango com uma saída só ganha "Sim" + "Não" (vermelho, para validar)
+{
+  const nodes = [
+    { id: 'p1', type: 'process' },
+    { id: 'q', type: 'decision' },
+    { id: 'p2', type: 'process' },
+    { id: 'fim', type: 'end' },
+  ];
+  const edges = [
+    { id: '1', source: 'p1', target: 'q', label: '' },
+    { id: '2', source: 'q', target: 'p2', label: '' },
+    { id: '3', source: 'p2', target: 'fim', label: '' },
+  ];
+  const out = fixDecisionExits(nodes, edges);
+  const saidas = out.filter((e) => e.source === 'q');
+  check('losango passa a ter 2 saídas', saidas.length === 2);
+  check('saída existente vira "Sim"', saidas.some((e) => e.target === 'p2' && e.label === 'Sim'));
+  check('nova saída "Não" volta para a etapa anterior, marcada para validar', saidas.some((e) => e.target === 'p1' && e.label === 'Não' && e.data.isDubious === true));
+
+  const ok = fixDecisionExits(nodes, [...edges, { id: '4', source: 'q', target: 'fim', label: 'Não' }]);
+  check('losango que já tem 2 saídas não é mexido', ok.length === 4);
 }
 
 console.log(R.join('\n'));

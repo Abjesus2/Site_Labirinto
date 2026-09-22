@@ -93,7 +93,7 @@ import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRe
 import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { NavigationModeContext } from '../lib/navigationMode';
-import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
+import { applyGeneratedJsonlLine, parseGeneratedBlock, repairGeneratedVersion, fixDecisionExits } from '../utils/aiGenerationParser';
 import { buildPrompt as buildManualAIPrompt } from '../lib/aiBrowserBridge';
 import { MiroEdgeToolbar } from './MiroEdgeToolbar';
 import { MiroMixedSelectionToolbar } from './MiroMixedSelectionToolbar';
@@ -2726,11 +2726,19 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     const layoutedGenerated: Record<string, { nodes: Node[], edges: Edge[] }> = {};
     let anyTimingGenerated = false;
 
+    const versionsSemLigacao: string[] = [];
+
     Object.keys(rawGenerated).forEach(v => {
-      const sanitized = ensureConnectedGraph(
-        rawGenerated[v].nodes,
-        rawGenerated[v].edges
+      const repaired = repairGeneratedVersion(rawGenerated[v]);
+      if (repaired.report.missingEdges) versionsSemLigacao.push(v);
+      const connected = ensureConnectedGraph(
+        repaired.nodes as Node[],
+        repaired.edges as Edge[]
       );
+      const sanitized = {
+        ...connected,
+        edges: fixDecisionExits(connected.nodes, connected.edges) as Edge[],
+      };
 
       if (sanitized.nodes.some(n => {
         const t = (n.data as any)?.timing;
@@ -2746,6 +2754,19 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const nodesWithSectors = buildSectorContainers(lNodes, 'TB');
       layoutedGenerated[v] = { nodes: nodesWithSectors, edges: lEdges };
     });
+
+    if (versionsSemLigacao.length > 0) {
+      // Quase sempre é a resposta da IA cortada por tamanho: ela escreveu as
+      // etapas e acabou o limite antes das ligações. Sem este aviso o usuário
+      // via só uma fila reta de linhas vermelhas e achava que era "dúvida" da IA.
+      showToast({
+        message:
+          `A IA não enviou as ligações da versão ${versionsSemLigacao.join(', ')} (a resposta provavelmente foi cortada por ser longa demais). ` +
+          'As etapas foram ligadas em sequência e marcadas em vermelho para revisão. Gere de novo só essa versão ou use outro provedor em "Configurar IA".',
+        tone: 'warn',
+        timeout: 15000,
+      });
+    }
 
     const shouldEnableTiming = hasTimingPrompt || anyTimingGenerated;
     setShowTimingMode(shouldEnableTiming);
@@ -2908,6 +2929,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           if (lineProgress !== null) setProgress(lineProgress);
         }
       }
+
+      // Última linha sem "\n" no final ficava presa no buffer e era perdida.
+      buffer += decoder.decode();
+      if (buffer.trim()) applyGeneratedJsonlLine(buffer, rawGenerated, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
 
       finalizeGeneratedContent(rawGenerated, mode, newVersionName);
     } catch (err: any) {

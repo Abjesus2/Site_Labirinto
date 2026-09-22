@@ -41,4 +41,15 @@ check(
 check('mantém a regra de nunca gerar swimlane/frame como nó (raia é desenhada pelo app)', /NÃO os utilize para gerar nós/.test(prompt));
 check('mantém a regra do losango com no mínimo 2 saídas', /NO MÍNIMO 2 arestas de saída/.test(prompt));
 
+// Correções depois do vídeo com 113 linhas vermelhas em fila reta e losangos
+// de uma saída só.
+check('exige escrever as arestas logo depois de cada nó (resposta cortada não perde as ligações)', /LOGO EM SEGUIDA todas as arestas que SAEM dele/.test(prompt));
+check('exemplo principal do formato não usa isDubious', !/"isDubious": true/.test(prompt.split('O que este exemplo ensina')[0]));
+check('isDubious descrito como exceção raríssima, esperado zero', /EXCEÇÃO RARÍSSIMA/.test(prompt) && /esperado é ZERO/.test(prompt));
+check('linha reta proibida em normal/detalhado', /LINHA RETA/.test(prompt));
+check('alternativas (2º ou 3º andar) viram um ramo para cada', /UM RAMO PARA CADA alternativa/.test(prompt));
+check('exemplo completo tem losango com duas saídas rotuladas', /"source": "n3", "target": "n4", "label": "Sim"/.test(prompt) && /"source": "n3", "target": "n6", "label": "Não"/.test(prompt));
+check('tem checklist final', /CHECKLIST FINAL/.test(prompt));
+check('notes curtos pra não estourar o tamanho', /no máximo ~200 caracteres/.test(prompt));
+
 console.log(R.join('\n'));
