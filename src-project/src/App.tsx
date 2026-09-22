@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { openAISettings } from './lib/aiSettingsUI';
 import { getLocalDiagrams, saveLocalDiagram, deleteLocalDiagram, getLocalFolders, saveLocalFolder, deleteLocalFolder } from './lib/storage';
 import { cryptoAvailable } from './lib/aiProviders';
 import { exportFullBackup, parseFullBackup, applyFullBackup } from './lib/fullBackup';
@@ -7,9 +6,9 @@ import { askText, showToast } from './lib/embedCompat';
 import { Diagram, Folder, APP_VERSION } from './types';
 import FlowEditor from './components/FlowEditor';
 import { FlowchartHeroAnimation } from './components/FlowchartHeroAnimation';
-import { SystemManualMenu } from './components/SystemManualMenu';
+import { OptionsMenu } from './components/OptionsMenu';
 import { LandingScreen } from './components/LandingScreen';
-import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode, Save, Lock, Download, Upload } from 'lucide-react';
+import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode, Lock, Download, Upload } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { downloadSystemManual } from './utils/systemManual';
 
@@ -273,19 +272,19 @@ export default function App() {
   const currentFolder = currentFolderId ? folders.find(f => f.id === currentFolderId) : null;
 
   return (
-    <div className="min-h-screen bg-[#FAFAFA] text-zinc-800 font-sans selection:bg-blue-100 selection:text-blue-900">
+    <div className="min-h-screen bg-zinc-50 text-zinc-800 font-sans selection:bg-blue-100 selection:text-blue-900">
       <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-zinc-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[var(--accent-600)] to-[var(--accent-ind-600)] flex items-center justify-center shadow-lg shadow-blue-500/20">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-white">
                   <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                   <line x1="3" y1="9" x2="21" y2="9"></line>
                   <line x1="9" y1="21" x2="9" y2="9"></line>
                 </svg>
               </div>
-              <span className="font-extrabold text-base sm:text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-indigo-800 hidden sm:inline-block">
+              <span className="font-extrabold text-base sm:text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[var(--accent-700)] to-[var(--accent-ind-800)] hidden sm:inline-block">
                 Labirinto
               </span>
             </div>
@@ -296,24 +295,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            <button
-              onClick={() => openAISettings()}
-              className="flex items-center gap-2 px-3 py-2 bg-white border border-zinc-200 text-zinc-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50 rounded-xl text-xs font-bold transition-all shadow-sm"
-              title="Escolher a IA e cadastrar chaves de API"
-            >
-              <SearchCode size={16} />
-              <span className="hidden sm:inline">Configurar IA</span>
-            </button>
-            <button
-              onClick={() => setIsBackupModalOpen(true)}
-              className="flex items-center gap-2 px-3 py-2 bg-white border border-zinc-200 text-zinc-700 hover:text-blue-700 hover:border-blue-300 hover:bg-blue-50 rounded-xl text-xs font-bold transition-all shadow-sm"
-              title="Exportar ou importar tudo: fluxogramas, pastas e chaves de IA"
-            >
-              <Save size={16} />
-              <span className="hidden sm:inline">Backup Completo</span>
-            </button>
-            <SystemManualMenu />
-            
+            <OptionsMenu onOpenBackup={() => setIsBackupModalOpen(true)} />
           </div>
         </div>
       </header>
@@ -335,7 +317,7 @@ export default function App() {
             </button>
             <button 
               onClick={createNewDiagram}
-              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs sm:text-sm transition-all shadow-md shadow-blue-500/20"
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 bg-[var(--accent-600)] hover:bg-[var(--accent-700)] text-white rounded-2xl font-bold text-xs sm:text-sm transition-all shadow-md shadow-blue-500/20"
             >
               <Plus size={18} strokeWidth={2.5} />
               <span>Novo Fluxo</span>
@@ -630,7 +612,7 @@ export default function App() {
                       </button>
                       <button 
                         type="submit"
-                        className="px-4 py-2 font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl"
+                        className="px-4 py-2 font-bold text-white bg-[var(--accent-600)] hover:bg-[var(--accent-700)] rounded-xl"
                       >
                         Criar
                       </button>

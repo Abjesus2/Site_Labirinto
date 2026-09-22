@@ -45,65 +45,6 @@ export function normalizeContainerZIndex(nodes: Node[]): Node[] {
   });
 }
 
-/**
- * Mantém raias (e, separadamente, quadros) alinhadas entre si: mesma borda
- * esquerda e mesma largura, como no layout de referência (raias empilhadas,
- * bordas e larguras idênticas). Chamado depois que o usuário termina de
- * arrastar ou redimensionar uma raia/quadro — todas as outras do MESMO tipo
- * (raia com raia, quadro com quadro, sem misturar) acompanham a que acabou
- * de ser ajustada. Y/altura de cada uma continuam livres (não empilha
- * automaticamente, só alinha X e largura).
- */
-/**
- * Igual a alignContainerSiblings, mas para quando NÃO tem uma raia/quadro
- * "recém-mexida" pra servir de referência — usado ao carregar/importar um
- * diagrama, corrigindo de uma vez raias (e, separadamente, quadros) que já
- * estavam salvas com bordas/larguras diferentes entre si (antes desta
- * correção existir, ou vindas de outra fonte). A primeira raia/quadro de
- * cada tipo, na ordem em que aparece no array, vira a referência.
- */
-export function alignAllContainers(nodes: Node[]): Node[] {
-  const referenceBoxByType = new Map<string, { x: number; width: number }>();
-  for (const n of nodes) {
-    if ((n.type !== 'swimlane' && n.type !== 'frame') || referenceBoxByType.has(n.type)) continue;
-    const box = getSectorNodeBox(n);
-    referenceBoxByType.set(n.type, { x: box.x, width: box.width });
-  }
-  if (referenceBoxByType.size === 0) return nodes;
-
-  let changed = false;
-  const next = nodes.map((n) => {
-    if (n.type !== 'swimlane' && n.type !== 'frame') return n;
-    const ref = referenceBoxByType.get(n.type)!;
-    if (n.position.x === ref.x && (n.style as any)?.width === ref.width) return n;
-    changed = true;
-    return {
-      ...n,
-      position: { ...n.position, x: ref.x },
-      style: { ...(n.style || {}), width: ref.width },
-    };
-  });
-  return changed ? next : nodes;
-}
-
-export function alignContainerSiblings(nodes: Node[], movedNodeId: string): Node[] {
-  const movedNode = nodes.find((n) => n.id === movedNodeId);
-  if (!movedNode || (movedNode.type !== 'swimlane' && movedNode.type !== 'frame')) return nodes;
-
-  const movedBox = getSectorNodeBox(movedNode);
-  const hasSiblings = nodes.some((n) => n.id !== movedNodeId && n.type === movedNode.type);
-  if (!hasSiblings) return nodes;
-
-  return nodes.map((n) => {
-    if (n.id === movedNodeId || n.type !== movedNode.type) return n;
-    return {
-      ...n,
-      position: { ...n.position, x: movedBox.x },
-      style: { ...(n.style || {}), width: movedBox.width },
-    };
-  });
-}
-
 const getSectorNodeBox = (node: Node): { x: number; y: number; width: number; height: number } => {
   const dim = getNodeDimensions(node.type);
   const width = (node.measured?.width as number) || (node.width as number) || (node.style?.width as number) || dim.width;
@@ -226,4 +167,27 @@ export function buildSectorContainers(nodes: Node[], direction: 'TB' | 'LR' = 'T
 
   // Raias/quadros ficam atrás (renderizados primeiro) dos nós do processo.
   return [...containers, ...nodes];
+}
+
+/**
+ * Reconstrói as raias/quadros GERADOS PELA IA (data.generatedByAI) para
+ * acompanharem a posição atual dos nós — usado depois de qualquer
+ * reorganização automática (dagre: "Organizar ↓/→", "Alinhar tudo (reto)")
+ * que reposiciona os nós de processo sem saber que existem raias/quadros ao
+ * redor deles. Sem isso, a raia ficava "para trás", ainda na posição de
+ * quando foi gerada, enquanto os nós já tinham ido para outro lugar —
+ * exatamente o "atividade fora da própria raia" visto em fluxos grandes.
+ * Raias/quadros criados manualmente pelo usuário (sem essa flag) nunca são
+ * tocados aqui — controle deles continua 100% manual.
+ */
+export function rebuildAIContainers(nodes: Node[], direction: 'TB' | 'LR' = 'TB'): Node[] {
+  const hasAIContainer = nodes.some(
+    (n) => (n.type === 'swimlane' || n.type === 'frame') && (n.data as any)?.generatedByAI === true
+  );
+  if (!hasAIContainer) return nodes;
+
+  const withoutOldAIContainers = nodes.filter(
+    (n) => !((n.type === 'swimlane' || n.type === 'frame') && (n.data as any)?.generatedByAI === true)
+  );
+  return buildSectorContainers(withoutOldAIContainers, direction);
 }

@@ -105,10 +105,13 @@ if (entrar) await click(entrar, 1200);
 
 const textoPainel = w.document.body.textContent || '';
 check('login Google removido', !/Entrar com Google/i.test(textoPainel) && !w.document.body.innerHTML.includes('M22.56 12.25'));
-check('botao "Configurar IA" no cabecalho', byText('button', /Configurar IA/i).length > 0);
+check('botao "Opções" no cabecalho', byText('button', /^Opções$/i).length > 0);
 check('sem login e sem nuvem no painel', !/Entrar com|OneDrive|Drive Vinculado/i.test(textoPainel) && byText('button', /^Entrar$/).length === 0);
 
-// ---- configuracao de IA
+// ---- configuracao de IA (agora dentro do menu "Opções")
+const opcoesBtn = byText('button', /^Opções$/i)[0];
+await click(opcoesBtn, 300);
+check('menu Opções traz "Configurar IA"', byText('button', /Configurar IA/i).length > 0);
 const cfgBtn = byText('button', /Configurar IA/i)[0];
 await click(cfgBtn, 500);
 const radios = [...w.document.querySelectorAll('input[type=radio][name="labirinto-ai-provider"]')];

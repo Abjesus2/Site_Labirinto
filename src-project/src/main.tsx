@@ -1,5 +1,8 @@
 import {installEmbedCompat} from './lib/embedCompat';
 import {installAIBridge} from './lib/aiBrowserBridge';
+// Só de importar já aplica o tema salvo em <html> antes da 1ª pintura —
+// evita o "flash" de tela clara antes de escurecer.
+import './lib/theme';
 
 try { installEmbedCompat(); } catch (e) { console.error('Falha na camada de compatibilidade', e); }
 try { installAIBridge(); } catch (e) { console.error('Falha ao instalar ponte de IA', e); }

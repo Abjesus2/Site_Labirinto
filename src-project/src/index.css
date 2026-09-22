@@ -238,6 +238,155 @@ body.is-dragging-edge-handle .react-flow__node .react-flow__handle,
   pointer-events: auto !important;
 }
 
+/* ===== Paleta de cor de destaque (marca/botões da tela inicial e do menu de
+   opções) — troca só o "azul" da marca, nunca as cores das formas do
+   fluxograma (que não usam essas variáveis). ===== */
+:root {
+  --accent-50: #eff6ff;
+  --accent-100: #dbeafe;
+  --accent-300: #93c5fd;
+  --accent-500: #3b82f6;
+  --accent-600: #2563eb;
+  --accent-700: #1d4ed8;
+  --accent-900: #1e3a8a;
+  --accent-ind-600: #4f46e5;
+  --accent-ind-800: #3730a3;
+}
+html[data-palette="violeta"] {
+  --accent-50: #faf5ff; --accent-100: #f3e8ff; --accent-300: #d8b4fe;
+  --accent-500: #a855f7; --accent-600: #9333ea; --accent-700: #7e22ce; --accent-900: #581c87;
+  --accent-ind-600: #9333ea; --accent-ind-800: #6b21a8;
+}
+html[data-palette="verde"] {
+  --accent-50: #ecfdf5; --accent-100: #d1fae5; --accent-300: #6ee7b7;
+  --accent-500: #10b981; --accent-600: #059669; --accent-700: #047857; --accent-900: #064e3b;
+  --accent-ind-600: #059669; --accent-ind-800: #065f46;
+}
+html[data-palette="rosa"] {
+  --accent-50: #fdf2f8; --accent-100: #fce7f3; --accent-300: #f9a8d4;
+  --accent-500: #ec4899; --accent-600: #db2777; --accent-700: #be185d; --accent-900: #831843;
+  --accent-ind-600: #db2777; --accent-ind-800: #9d174d;
+}
+html[data-palette="laranja"] {
+  --accent-50: #fff7ed; --accent-100: #ffedd5; --accent-300: #fdba74;
+  --accent-500: #f97316; --accent-600: #ea580c; --accent-700: #c2410c; --accent-900: #7c2d12;
+  --accent-ind-600: #ea580c; --accent-ind-800: #9a3412;
+}
+/* ===== Modo escuro: raia zinc/slate invertida. Todas as regras abaixo
+   EXCLUEM qualquer coisa dentro de .react-flow__node (raias, quadros e
+   formas do fluxograma) — cores de forma nunca mudam, só o resto do
+   app (fundo, textos, bordas da interface). bg/border/ring em 700+ NÃO
+   invertem: no app esses tons só aparecem como acento propositalmente
+   escuro (botão preto, barra de tabela, menu flutuante), nunca como
+   fundo neutro que precisaria clarear. ===== */
+html[data-theme="dark"] {
+  --dm-white: #18181b;
+  --dm-zinc-50: #18181b;
+  --dm-zinc-100: #27272a;
+  --dm-zinc-200: #3f3f46;
+  --dm-zinc-300: #52525b;
+  --dm-zinc-400: #71717a;
+  --dm-zinc-500: #a1a1aa;
+  --dm-zinc-600: #d4d4d8;
+  --dm-zinc-700: #e4e4e7;
+  --dm-zinc-800: #f4f4f5;
+  --dm-zinc-900: #fafafa;
+  --dm-zinc-950: #fafafa;
+  --dm-slate-50: #0f172a;
+  --dm-slate-100: #1e293b;
+  --dm-slate-200: #334155;
+  --dm-slate-300: #475569;
+  --dm-slate-400: #64748b;
+  --dm-slate-500: #94a3b8;
+  --dm-slate-600: #cbd5e1;
+  --dm-slate-700: #e2e8f0;
+  --dm-slate-800: #f1f5f9;
+  --dm-slate-900: #f8fafc;
+  --dm-slate-950: #f8fafc;
+}
 
+html[data-theme="dark"] .bg-zinc-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-zinc-50/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-zinc-50) !important; }
+html[data-theme="dark"] .text-zinc-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-50/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-50) !important; }
+html[data-theme="dark"] .border-zinc-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-zinc-50/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-zinc-50) !important; }
+html[data-theme="dark"] .ring-zinc-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-zinc-50/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-zinc-50) !important; }
+html[data-theme="dark"] .divide-zinc-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-zinc-50/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-zinc-50) !important; }
+html[data-theme="dark"] .bg-zinc-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-zinc-100/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-zinc-100) !important; }
+html[data-theme="dark"] .text-zinc-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-100/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-100) !important; }
+html[data-theme="dark"] .border-zinc-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-zinc-100/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-zinc-100) !important; }
+html[data-theme="dark"] .ring-zinc-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-zinc-100/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-zinc-100) !important; }
+html[data-theme="dark"] .divide-zinc-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-zinc-100/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-zinc-100) !important; }
+html[data-theme="dark"] .bg-zinc-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-zinc-200/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-zinc-200) !important; }
+html[data-theme="dark"] .text-zinc-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-200/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-200) !important; }
+html[data-theme="dark"] .border-zinc-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-zinc-200/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-zinc-200) !important; }
+html[data-theme="dark"] .ring-zinc-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-zinc-200/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-zinc-200) !important; }
+html[data-theme="dark"] .divide-zinc-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-zinc-200/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-zinc-200) !important; }
+html[data-theme="dark"] .bg-zinc-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-zinc-300/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-zinc-300) !important; }
+html[data-theme="dark"] .text-zinc-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-300/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-300) !important; }
+html[data-theme="dark"] .border-zinc-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-zinc-300/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-zinc-300) !important; }
+html[data-theme="dark"] .ring-zinc-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-zinc-300/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-zinc-300) !important; }
+html[data-theme="dark"] .divide-zinc-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-zinc-300/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-zinc-300) !important; }
+html[data-theme="dark"] .bg-zinc-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-zinc-400/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-zinc-400) !important; }
+html[data-theme="dark"] .text-zinc-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-400/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-400) !important; }
+html[data-theme="dark"] .border-zinc-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-zinc-400/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-zinc-400) !important; }
+html[data-theme="dark"] .ring-zinc-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-zinc-400/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-zinc-400) !important; }
+html[data-theme="dark"] .divide-zinc-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-zinc-400/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-zinc-400) !important; }
+html[data-theme="dark"] .bg-zinc-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-zinc-500/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-zinc-500) !important; }
+html[data-theme="dark"] .text-zinc-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-500/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-500) !important; }
+html[data-theme="dark"] .border-zinc-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-zinc-500/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-zinc-500) !important; }
+html[data-theme="dark"] .ring-zinc-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-zinc-500/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-zinc-500) !important; }
+html[data-theme="dark"] .divide-zinc-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-zinc-500/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-zinc-500) !important; }
+html[data-theme="dark"] .bg-zinc-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-zinc-600/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-zinc-600) !important; }
+html[data-theme="dark"] .text-zinc-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-600/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-600) !important; }
+html[data-theme="dark"] .border-zinc-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-zinc-600/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-zinc-600) !important; }
+html[data-theme="dark"] .ring-zinc-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-zinc-600/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-zinc-600) !important; }
+html[data-theme="dark"] .divide-zinc-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-zinc-600/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-zinc-600) !important; }
+html[data-theme="dark"] .text-zinc-700:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-700/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-700) !important; }
+html[data-theme="dark"] .text-zinc-800:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-800/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-800) !important; }
+html[data-theme="dark"] .text-zinc-900:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-900/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-900) !important; }
+html[data-theme="dark"] .text-zinc-950:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-zinc-950/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-zinc-950) !important; }
+html[data-theme="dark"] .bg-slate-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-slate-50/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-slate-50) !important; }
+html[data-theme="dark"] .text-slate-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-50/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-50) !important; }
+html[data-theme="dark"] .border-slate-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-slate-50/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-slate-50) !important; }
+html[data-theme="dark"] .ring-slate-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-slate-50/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-slate-50) !important; }
+html[data-theme="dark"] .divide-slate-50:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-slate-50/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-slate-50) !important; }
+html[data-theme="dark"] .bg-slate-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-slate-100/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-slate-100) !important; }
+html[data-theme="dark"] .text-slate-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-100/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-100) !important; }
+html[data-theme="dark"] .border-slate-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-slate-100/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-slate-100) !important; }
+html[data-theme="dark"] .ring-slate-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-slate-100/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-slate-100) !important; }
+html[data-theme="dark"] .divide-slate-100:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-slate-100/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-slate-100) !important; }
+html[data-theme="dark"] .bg-slate-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-slate-200/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-slate-200) !important; }
+html[data-theme="dark"] .text-slate-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-200/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-200) !important; }
+html[data-theme="dark"] .border-slate-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-slate-200/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-slate-200) !important; }
+html[data-theme="dark"] .ring-slate-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-slate-200/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-slate-200) !important; }
+html[data-theme="dark"] .divide-slate-200:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-slate-200/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-slate-200) !important; }
+html[data-theme="dark"] .bg-slate-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-slate-300/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-slate-300) !important; }
+html[data-theme="dark"] .text-slate-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-300/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-300) !important; }
+html[data-theme="dark"] .border-slate-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-slate-300/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-slate-300) !important; }
+html[data-theme="dark"] .ring-slate-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-slate-300/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-slate-300) !important; }
+html[data-theme="dark"] .divide-slate-300:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-slate-300/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-slate-300) !important; }
+html[data-theme="dark"] .bg-slate-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-slate-400/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-slate-400) !important; }
+html[data-theme="dark"] .text-slate-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-400/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-400) !important; }
+html[data-theme="dark"] .border-slate-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-slate-400/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-slate-400) !important; }
+html[data-theme="dark"] .ring-slate-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-slate-400/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-slate-400) !important; }
+html[data-theme="dark"] .divide-slate-400:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-slate-400/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-slate-400) !important; }
+html[data-theme="dark"] .bg-slate-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-slate-500/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-slate-500) !important; }
+html[data-theme="dark"] .text-slate-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-500/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-500) !important; }
+html[data-theme="dark"] .border-slate-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-slate-500/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-slate-500) !important; }
+html[data-theme="dark"] .ring-slate-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-slate-500/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-slate-500) !important; }
+html[data-theme="dark"] .divide-slate-500:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-slate-500/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-slate-500) !important; }
+html[data-theme="dark"] .bg-slate-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-slate-600/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-slate-600) !important; }
+html[data-theme="dark"] .text-slate-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-600/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-600) !important; }
+html[data-theme="dark"] .border-slate-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="border-slate-600/"]:not(.react-flow__node):not(.react-flow__node *) { border-color: var(--dm-slate-600) !important; }
+html[data-theme="dark"] .ring-slate-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="ring-slate-600/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-ring-color: var(--dm-slate-600) !important; }
+html[data-theme="dark"] .divide-slate-600:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="divide-slate-600/"]:not(.react-flow__node):not(.react-flow__node *) { --tw-divide-color: var(--dm-slate-600) !important; }
+html[data-theme="dark"] .text-slate-700:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-700/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-700) !important; }
+html[data-theme="dark"] .text-slate-800:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-800/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-800) !important; }
+html[data-theme="dark"] .text-slate-900:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-900/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-900) !important; }
+html[data-theme="dark"] .text-slate-950:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="text-slate-950/"]:not(.react-flow__node):not(.react-flow__node *) { color: var(--dm-slate-950) !important; }
 
+html[data-theme="dark"] .bg-white:not(.react-flow__node):not(.react-flow__node *), html[data-theme="dark"] [class*="bg-white/"]:not(.react-flow__node):not(.react-flow__node *) { background-color: var(--dm-white) !important; }
+html[data-theme="dark"] .placeholder-zinc-400::placeholder { color: var(--dm-zinc-400) !important; }
+html[data-theme="dark"] .placeholder-zinc-500::placeholder { color: var(--dm-zinc-500) !important; }
 
+html[data-theme="dark"] body { background-color: var(--dm-zinc-50); }
+html[data-theme="dark"] { color-scheme: dark; }

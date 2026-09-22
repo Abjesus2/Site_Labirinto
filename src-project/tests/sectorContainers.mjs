@@ -1,4 +1,4 @@
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings, alignAllContainers } from '../.tmp-sectorContainers.mjs';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers } from '../.tmp-sectorContainers.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -90,74 +90,42 @@ const proc = (id, x, y, dept) => ({
   check('quadro do setor menor fica centralizado sobre o próprio conteúdo', Math.abs(frameBCenterX - nodeBCenterX) < 1, `${frameBCenterX} vs ${nodeBCenterX}`);
 }
 
-// 6. alignContainerSiblings: mover/redimensionar uma raia mantém as outras
-//    raias (nunca os quadros) com a mesma borda esquerda e largura —
-//    layout de referência (raias empilhadas, mesmo X e largura).
+// 6. rebuildAIContainers: depois de um "Organizar" (dagre) que reposiciona
+//    os nós de processo, a raia gerada pela IA (data.generatedByAI) tem que
+//    acompanhar — reconstruída do zero ao redor da posição NOVA dos nós do
+//    mesmo departamento, nunca deixada pra trás na posição antiga.
 {
   const nodes = [
-    { id: 'lane1', type: 'swimlane', position: { x: 0, y: 0 }, style: { width: 800, height: 200 }, data: { label: 'Picking' } },
-    { id: 'lane2', type: 'swimlane', position: { x: 40, y: 220 }, style: { width: 700, height: 180 }, data: { label: 'Coleta' } },
-    { id: 'lane3', type: 'swimlane', position: { x: -20, y: 420 }, style: { width: 900, height: 160 }, data: { label: 'Embalagem' } },
-    { id: 'frame1', type: 'frame', position: { x: 200, y: 0 }, style: { width: 300, height: 100 }, data: {} },
-    { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: { label: 'Processo' } },
+    { id: 'sector_old_a', type: 'swimlane', position: { x: -999, y: -999 }, style: { width: 50, height: 50 }, zIndex: CONTAINER_BASE_Z_INDEX, data: { label: 'Vendas', generatedByAI: true } },
+    { id: 'sector_old_b', type: 'swimlane', position: { x: -999, y: -500 }, style: { width: 50, height: 50 }, zIndex: CONTAINER_BASE_Z_INDEX, data: { label: 'Financeiro', generatedByAI: true } },
+    proc('a1', 0, 0, 'Vendas'),
+    proc('a2', 200, 0, 'Vendas'),
+    proc('b1', 0, 300, 'Financeiro'),
+    proc('b2', 400, 300, 'Financeiro'),
   ];
-  const result = alignContainerSiblings(nodes, 'lane1');
-  const lane2 = result.find((n) => n.id === 'lane2');
-  const lane3 = result.find((n) => n.id === 'lane3');
-  const frame1 = result.find((n) => n.id === 'frame1');
-  const n1 = result.find((n) => n.id === 'n1');
-  check('raia movida/redimensionada não muda a própria posição/tamanho', result.find((n) => n.id === 'lane1').position.x === 0 && result.find((n) => n.id === 'lane1').style.width === 800);
-  check('outras raias acompanham o X da raia ajustada', lane2.position.x === 0 && lane3.position.x === 0, `${lane2.position.x}, ${lane3.position.x}`);
-  check('outras raias acompanham a largura da raia ajustada', lane2.style.width === 800 && lane3.style.width === 800, `${lane2.style.width}, ${lane3.style.width}`);
-  check('outras raias mantêm o próprio Y/altura (não empilha automaticamente)', lane2.position.y === 220 && lane3.position.y === 420);
-  check('quadro (tipo diferente) não é mexido ao alinhar raias', frame1.position.x === 200 && frame1.style.width === 300);
-  check('nó de processo não é mexido', n1.position.x === 10);
-}
-
-// 7. Sem outras raias/quadros do mesmo tipo, não mexe em nada.
-{
-  const nodes = [
-    { id: 'lane1', type: 'swimlane', position: { x: 0, y: 0 }, style: { width: 800, height: 200 }, data: {} },
-    { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: {} },
-  ];
-  const result = alignContainerSiblings(nodes, 'lane1');
-  check('raia sozinha (sem irmãs) não gera nova referência do array', result === nodes);
-}
-
-// 8. alignAllContainers: corrige de uma vez, ao carregar/importar, raias
-//    (e quadros, separadamente) que já estavam salvas com borda/largura
-//    diferentes entre si — sem precisar o usuário mexer em nenhuma delas.
-{
-  const nodes = [
-    { id: 'lane1', type: 'swimlane', position: { x: 0, y: 0 }, style: { width: 800, height: 200 }, data: { label: 'Embalagem/Faturamento' } },
-    { id: 'lane2', type: 'swimlane', position: { x: 40, y: 220 }, style: { width: 650, height: 180 }, data: { label: 'Expedição' } },
-    { id: 'lane3', type: 'swimlane', position: { x: -30, y: 420 }, style: { width: 900, height: 260 }, data: { label: 'Reserva' } },
-    { id: 'frame1', type: 'frame', position: { x: 200, y: 0 }, style: { width: 300, height: 100 }, data: {} },
-    { id: 'frame2', type: 'frame', position: { x: 250, y: 120 }, style: { width: 400, height: 100 }, data: {} },
-    { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: { label: 'Processo' } },
-  ];
-  const result = alignAllContainers(nodes);
+  const result = rebuildAIContainers(nodes, 'TB');
   const lanes = result.filter((n) => n.type === 'swimlane');
-  const frames = result.filter((n) => n.type === 'frame');
-  const n1 = result.find((n) => n.id === 'n1');
-  check('todas as raias ficam com o X da primeira', lanes.every((l) => l.position.x === 0), JSON.stringify(lanes.map((l) => l.position.x)));
-  check('todas as raias ficam com a largura da primeira', lanes.every((l) => l.style.width === 800), JSON.stringify(lanes.map((l) => l.style.width)));
-  check('raias mantêm o próprio Y/altura', lanes[1].position.y === 220 && lanes[2].position.y === 420);
-  check('todos os quadros ficam com o X/largura do primeiro quadro (grupo separado das raias)', frames.every((f) => f.position.x === 200 && f.style.width === 300));
-  check('nó de processo não é mexido', n1.position.x === 10);
+  check('as raias antigas (posição/tamanho velhos) são descartadas, não acumulam duplicadas', lanes.length === 2, 'raias encontradas: ' + lanes.length);
+  check('a raia reconstruída envolve a posição ATUAL dos nós, não a antiga', lanes.every((l) => l.position.x > -999 && l.position.y > -999), JSON.stringify(lanes.map((l) => l.position)));
+  const a1 = result.find((n) => n.id === 'a1');
+  check('nós de processo continuam no lugar (rebuildAIContainers só mexe nas raias/quadros)', a1.position.x === 0 && a1.position.y === 0);
 }
 
-// 9. alignAllContainers sem raias/quadros (ou só 1 de cada) não mexe em nada.
+// 7. Raia/quadro criada manualmente pelo usuário (sem generatedByAI) nunca é
+//    tocada por rebuildAIContainers — controle 100% manual preservado.
 {
   const nodes = [
-    { id: 'lane1', type: 'swimlane', position: { x: 5, y: 0 }, style: { width: 800, height: 200 }, data: {} },
+    { id: 'lane_manual', type: 'swimlane', position: { x: 5, y: 5 }, style: { width: 123, height: 45 }, data: { label: 'Minha raia' } },
     { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: {} },
   ];
-  const result = alignAllContainers(nodes);
-  check('raia sozinha (já é a própria referência) não gera nova referência do array', result === nodes);
+  const result = rebuildAIContainers(nodes, 'TB');
+  check('sem nenhuma raia/quadro gerada pela IA no diagrama, nada muda (mesma referência)', result === nodes);
+}
 
-  const semContainers = [{ id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: {} }];
-  check('sem raia/quadro nenhum, retorna a mesma referência', alignAllContainers(semContainers) === semContainers);
+// 8. Sem raia/quadro nenhuma no diagrama, rebuildAIContainers não mexe em nada.
+{
+  const semContainers = [proc('n1', 10, 10, 'Vendas')];
+  check('sem raia/quadro nenhuma, retorna a mesma referência', rebuildAIContainers(semContainers) === semContainers);
 }
 
 console.log(R.join('\n'));

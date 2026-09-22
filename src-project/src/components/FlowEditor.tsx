@@ -90,7 +90,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings, alignAllContainers } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { NavigationModeContext } from '../lib/navigationMode';
 import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
@@ -529,9 +529,6 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           }
 
           if (importedNodes.length > 0) {
-            // Raias/quadros importados de outra fonte (ou salvos antes desta
-            // correção) já entram alinhados entre si (mesma borda e largura).
-            importedNodes = alignAllContainers(importedNodes);
             setNodes(importedNodes);
             setEdges(importedEdges);
             pushHistory(importedNodes, importedEdges, 'Importou arquivo JSON');
@@ -682,10 +679,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       Object.keys(rawVersions).forEach((v) => {
         loadedVersions[v] = {
           ...rawVersions[v],
-          // Também alinha raias/quadros que já estavam salvos com bordas ou
-          // larguras diferentes entre si (diagramas antigos ou vindos de
-          // outra fonte), sem esperar o usuário mexer numa delas.
-          nodes: alignAllContainers(normalizeContainerZIndex(rawVersions[v].nodes || [])),
+          nodes: normalizeContainerZIndex(rawVersions[v].nodes || []),
         };
       });
       const activeV = data.activeVersion || 'normal';
@@ -776,15 +770,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, []);
 
   const onNodeDragStop = useCallback((_: any, node: Node) => {
-    if (node.type === 'swimlane' || node.type === 'frame') {
-      const alignedNodes = alignContainerSiblings(nodes, node.id);
-      if (alignedNodes !== nodes) {
-        setNodes(alignedNodes);
-        pushHistory(alignedNodes, edges, 'Moveu elemento');
-        saveToCloud(activeVersion, alignedNodes, edges);
-        return;
-      }
-    }
+    // Mover uma raia/quadro NÃO mexe mais nas outras automaticamente — o
+    // usuário quer controle manual total aqui; o alinhamento garantido fica
+    // só na geração por IA (buildSectorContainers), não como reação a
+    // qualquer arraste.
     pushHistory(nodes, edges, 'Moveu elemento');
     saveToCloud(activeVersion, nodes, edges);
   }, [nodes, edges, activeVersion, pushHistory, saveToCloud]);
@@ -1262,9 +1251,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           }
           return n;
         });
-        // Redimensionar uma raia/quadro mantém as outras do mesmo tipo com a
-        // mesma largura e borda esquerda (alinhadas como na imagem de referência).
-        updated = alignContainerSiblings(updated, id);
+        // Redimensionar uma raia/quadro NÃO mexe mais nas outras — controle
+        // manual total do usuário (ver onNodeDragStop).
         pushHistory(updated, edges, 'Redimensionou elemento');
         saveToCloud(activeVersion, updated, edges);
         return updated;
@@ -2399,10 +2387,15 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // Auto Layout using Dagre
   const applyAutoLayout = (direction: 'TB' | 'LR' = 'TB') => {
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, direction);
-    setNodes([...layoutedNodes]);
+    // O dagre reposiciona os nós de processo sem saber que existem
+    // raias/quadros gerados pela IA ao redor deles — reconstrói essas
+    // raias/quadros (só os da IA; os manuais do usuário ficam intocados)
+    // pra continuarem envolvendo as atividades certas, sem sobrepor.
+    const finalNodes = rebuildAIContainers(layoutedNodes, direction);
+    setNodes([...finalNodes]);
     setEdges([...layoutedEdges]);
-    pushHistory(layoutedNodes, layoutedEdges);
-    saveToCloud(activeVersion, layoutedNodes, layoutedEdges);
+    pushHistory(finalNodes, layoutedEdges);
+    saveToCloud(activeVersion, finalNodes, layoutedEdges);
     setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 50);
   };
 
@@ -2410,10 +2403,11 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const alignSelectedNodes = (type: 'center-x' | 'center-y' | 'left' | 'right' | 'top' | 'bottom' | 'distribute-v' | 'distribute-h' | 'straighten-all') => {
     if (type === 'straighten-all') {
       const { nodes: lNodes, edges: lEdges } = getLayoutedElements(nodes, edges, 'TB');
-      setNodes([...lNodes]);
+      const finalNodes = rebuildAIContainers(lNodes, 'TB');
+      setNodes([...finalNodes]);
       setEdges([...lEdges]);
-      pushHistory(lNodes, lEdges);
-      saveToCloud(activeVersion, lNodes, lEdges);
+      pushHistory(finalNodes, lEdges);
+      saveToCloud(activeVersion, finalNodes, lEdges);
       setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
       return;
     }
@@ -4050,6 +4044,15 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             onDragOver={isNavigationMode ? undefined : onDragOver}
             panOnDrag={isNavigationMode || toolMode === 'pan'}
             selectionOnDrag={!isNavigationMode && toolMode === 'select'}
+            // Desliga o auto-scroll durante a seleção por arraste: perto da
+            // borda do canvas ele rola o conteúdo por baixo do mouse
+            // enquanto a caixa de seleção ainda está aberta, varrendo (e
+            // selecionando) formas/linhas que passaram a ficar dentro da
+            // caixa só por causa da rolagem — nunca porque o mouse de fato
+            // passou por cima delas. Sem isso, "selecionei uma coisa e veio
+            // outra junto que eu nem toquei" quando o arraste começa perto
+            // do limite da tela.
+            autoPanOnSelection={false}
             multiSelectionKeyCode={['Control', 'Meta', 'Shift']}
             connectionMode={ConnectionMode.Loose}
             snapToGrid={true}
