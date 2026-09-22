@@ -54,6 +54,38 @@ export function normalizeContainerZIndex(nodes: Node[]): Node[] {
  * de ser ajustada. Y/altura de cada uma continuam livres (não empilha
  * automaticamente, só alinha X e largura).
  */
+/**
+ * Igual a alignContainerSiblings, mas para quando NÃO tem uma raia/quadro
+ * "recém-mexida" pra servir de referência — usado ao carregar/importar um
+ * diagrama, corrigindo de uma vez raias (e, separadamente, quadros) que já
+ * estavam salvas com bordas/larguras diferentes entre si (antes desta
+ * correção existir, ou vindas de outra fonte). A primeira raia/quadro de
+ * cada tipo, na ordem em que aparece no array, vira a referência.
+ */
+export function alignAllContainers(nodes: Node[]): Node[] {
+  const referenceBoxByType = new Map<string, { x: number; width: number }>();
+  for (const n of nodes) {
+    if ((n.type !== 'swimlane' && n.type !== 'frame') || referenceBoxByType.has(n.type)) continue;
+    const box = getSectorNodeBox(n);
+    referenceBoxByType.set(n.type, { x: box.x, width: box.width });
+  }
+  if (referenceBoxByType.size === 0) return nodes;
+
+  let changed = false;
+  const next = nodes.map((n) => {
+    if (n.type !== 'swimlane' && n.type !== 'frame') return n;
+    const ref = referenceBoxByType.get(n.type)!;
+    if (n.position.x === ref.x && (n.style as any)?.width === ref.width) return n;
+    changed = true;
+    return {
+      ...n,
+      position: { ...n.position, x: ref.x },
+      style: { ...(n.style || {}), width: ref.width },
+    };
+  });
+  return changed ? next : nodes;
+}
+
 export function alignContainerSiblings(nodes: Node[], movedNodeId: string): Node[] {
   const movedNode = nodes.find((n) => n.id === movedNodeId);
   if (!movedNode || (movedNode.type !== 'swimlane' && movedNode.type !== 'frame')) return nodes;

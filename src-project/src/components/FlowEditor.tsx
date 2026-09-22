@@ -90,7 +90,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings, alignAllContainers } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { NavigationModeContext } from '../lib/navigationMode';
 import { applyGeneratedJsonlLine, parseGeneratedBlock } from '../utils/aiGenerationParser';
@@ -529,6 +529,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           }
 
           if (importedNodes.length > 0) {
+            // Raias/quadros importados de outra fonte (ou salvos antes desta
+            // correção) já entram alinhados entre si (mesma borda e largura).
+            importedNodes = alignAllContainers(importedNodes);
             setNodes(importedNodes);
             setEdges(importedEdges);
             pushHistory(importedNodes, importedEdges, 'Importou arquivo JSON');
@@ -679,7 +682,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       Object.keys(rawVersions).forEach((v) => {
         loadedVersions[v] = {
           ...rawVersions[v],
-          nodes: normalizeContainerZIndex(rawVersions[v].nodes || []),
+          // Também alinha raias/quadros que já estavam salvos com bordas ou
+          // larguras diferentes entre si (diagramas antigos ou vindos de
+          // outra fonte), sem esperar o usuário mexer numa delas.
+          nodes: alignAllContainers(normalizeContainerZIndex(rawVersions[v].nodes || [])),
         };
       });
       const activeV = data.activeVersion || 'normal';

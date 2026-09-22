@@ -1,4 +1,4 @@
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings } from '../.tmp-sectorContainers.mjs';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, alignContainerSiblings, alignAllContainers } from '../.tmp-sectorContainers.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -122,6 +122,42 @@ const proc = (id, x, y, dept) => ({
   ];
   const result = alignContainerSiblings(nodes, 'lane1');
   check('raia sozinha (sem irmãs) não gera nova referência do array', result === nodes);
+}
+
+// 8. alignAllContainers: corrige de uma vez, ao carregar/importar, raias
+//    (e quadros, separadamente) que já estavam salvas com borda/largura
+//    diferentes entre si — sem precisar o usuário mexer em nenhuma delas.
+{
+  const nodes = [
+    { id: 'lane1', type: 'swimlane', position: { x: 0, y: 0 }, style: { width: 800, height: 200 }, data: { label: 'Embalagem/Faturamento' } },
+    { id: 'lane2', type: 'swimlane', position: { x: 40, y: 220 }, style: { width: 650, height: 180 }, data: { label: 'Expedição' } },
+    { id: 'lane3', type: 'swimlane', position: { x: -30, y: 420 }, style: { width: 900, height: 260 }, data: { label: 'Reserva' } },
+    { id: 'frame1', type: 'frame', position: { x: 200, y: 0 }, style: { width: 300, height: 100 }, data: {} },
+    { id: 'frame2', type: 'frame', position: { x: 250, y: 120 }, style: { width: 400, height: 100 }, data: {} },
+    { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: { label: 'Processo' } },
+  ];
+  const result = alignAllContainers(nodes);
+  const lanes = result.filter((n) => n.type === 'swimlane');
+  const frames = result.filter((n) => n.type === 'frame');
+  const n1 = result.find((n) => n.id === 'n1');
+  check('todas as raias ficam com o X da primeira', lanes.every((l) => l.position.x === 0), JSON.stringify(lanes.map((l) => l.position.x)));
+  check('todas as raias ficam com a largura da primeira', lanes.every((l) => l.style.width === 800), JSON.stringify(lanes.map((l) => l.style.width)));
+  check('raias mantêm o próprio Y/altura', lanes[1].position.y === 220 && lanes[2].position.y === 420);
+  check('todos os quadros ficam com o X/largura do primeiro quadro (grupo separado das raias)', frames.every((f) => f.position.x === 200 && f.style.width === 300));
+  check('nó de processo não é mexido', n1.position.x === 10);
+}
+
+// 9. alignAllContainers sem raias/quadros (ou só 1 de cada) não mexe em nada.
+{
+  const nodes = [
+    { id: 'lane1', type: 'swimlane', position: { x: 5, y: 0 }, style: { width: 800, height: 200 }, data: {} },
+    { id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: {} },
+  ];
+  const result = alignAllContainers(nodes);
+  check('raia sozinha (já é a própria referência) não gera nova referência do array', result === nodes);
+
+  const semContainers = [{ id: 'n1', type: 'process', position: { x: 10, y: 10 }, data: {} }];
+  check('sem raia/quadro nenhum, retorna a mesma referência', alignAllContainers(semContainers) === semContainers);
 }
 
 console.log(R.join('\n'));

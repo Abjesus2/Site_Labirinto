@@ -327,6 +327,16 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
       const midX = (p1.x + p2.x) / 2;
       const midY = (p1.y + p2.y) / 2;
 
+      // Trecho colado bem na ponta (curto, logo após o último dobra perto da
+      // forma) fica com a alça de segmento praticamente em cima do círculo
+      // azul de reconectar a seta — os dois disputavam o clique e a bolinha
+      // ficava difícil de acertar. Sem alça de segmento perto demais de
+      // qualquer ponta; ali a própria bolinha de reconectar já cobre o ajuste.
+      const ENDPOINT_HANDLE_EXCLUSION_RADIUS = 26;
+      const distToSource = Math.hypot(midX - currentSourceX, midY - currentSourceY);
+      const distToTarget = Math.hypot(midX - currentTargetX, midY - currentTargetY);
+      if (distToSource < ENDPOINT_HANDLE_EXCLUSION_RADIUS || distToTarget < ENDPOINT_HANDLE_EXCLUSION_RADIUS) continue;
+
       // Allow controls for orthogonal segments (vertical or horizontal) using float tolerance
       const isVert = dx < 2.5 && dy >= MIN_HANDLE_SEGMENT_LENGTH;
       const isHoriz = dy < 2.5 && dx >= MIN_HANDLE_SEGMENT_LENGTH;
