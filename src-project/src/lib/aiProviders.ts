@@ -493,7 +493,9 @@ export const buildRequest = (
         signal: opts.signal || undefined,
         body: JSON.stringify({
           contents: [{ role: 'user', parts }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: opts.maxTokens || 32768 },
+          // Nunca reduz o padrão do Gemini (32768) — opts.maxTokens só existe
+          // pra AUMENTAR o teto em geração 'detalhado', nunca pra diminuir.
+          generationConfig: { temperature: 0.2, maxOutputTokens: Math.max(opts.maxTokens || 0, 32768) },
         }),
       },
     };
@@ -570,6 +572,12 @@ export const buildRequest = (
         model,
         temperature: 0.2,
         stream: opts.stream,
+        // Só manda max_tokens quando alguém pede um valor explícito (ex.:
+        // geração 'detalhado', que precisa de mais espaço de saída) — sem
+        // isso, deixa a API usar o próprio padrão do modelo, que já costuma
+        // ser o maior possível; mandar um teto fixo aqui poderia CORTAR a
+        // resposta de modelos cujo padrão implícito é maior que isso.
+        ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
         messages: [{ role: 'user', content: content.length === 1 ? textBlock : content }],
       }),
     },

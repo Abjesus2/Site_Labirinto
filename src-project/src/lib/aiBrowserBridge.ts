@@ -96,6 +96,7 @@ export const buildPrompt = (body: any): string => {
         {"version": "simples", "edge": {"id": "e1", "source": "n1", "target": "n2"}}
         {"progress": 50}
         {"version": "detalhado", "node": {"id": "d1", "label": "Início", "type": "start", "duration": 0}}
+        {"version": "detalhado", "node": {"id": "d2", "label": "Conferência de Documentos Fiscais Recebidos", "type": "process", "duration": 12, "department": "Faturamento", "notes": "Sistema: ERP Financeiro módulo Fiscal. Responsável: Analista de Faturamento. Critério: nota fiscal deve bater com o pedido de compra em valor, quantidade e CFOP. Exceção: divergência acima de 5% vai para aprovação do supervisor."}}
         ...
         {"progress": 100}
         
@@ -109,7 +110,15 @@ export const buildPrompt = (body: any): string => {
         1. ARCHITECTURAL HIERARCHY & COMPLEXITY LEVELS:
         - 'simples' (Macro / Executive View): 4 to 6 core nodes. High-level summary of the happy path and primary goal.
         - 'normal' (Tactical Standard Process): 9 to 15 nodes. MUST include at least 2-3 decision gates (if 'decision' is allowed), branching paths for different conditions/exceptions, feedback/rework loops, and proper convergence (merging) back into the main flow.
-        - 'detalhado' (Operational Deep-Dive): 16 to 28+ nodes. Exhaustive step-by-step mapping: pre-validations, micro-tasks, parallel/conditional sub-branches for different scenarios, failure/retry loops, and convergence to finalization.
+        - 'detalhado' (Operational Deep-Dive): AT LEAST 16 nodes, WITH NO UPPER CEILING — keep breaking steps down and adding decision gates, sub-branches, and exception handling until every distinct action, check, system, role, and rule mentioned in (or reasonably implied by) the source material has its own node. Do not stop at a round number just because it "looks complete"; stop only when there is truly nothing left to extract from the source. Exhaustive step-by-step mapping: pre-validations, micro-tasks, parallel/conditional sub-branches for different scenarios, failure/retry loops, and convergence to finalization.
+
+        1.1. MAXIMUM DETAIL EXTRACTION FOR 'detalhado' (CRITICAL — ESTE É O PEDIDO PRINCIPAL DO USUÁRIO):
+        - A versão 'detalhado' precisa conter o MÁXIMO DE INFORMAÇÃO POSSÍVEL extraída do prompt do usuário e/ou dos arquivos anexados — nada relevante que estiver no texto/arquivo pode ficar de fora do fluxo.
+        - Releia o prompt e cada arquivo anexado e garanta que TODO fato concreto neles mencionado vire conteúdo no diagrama: sistemas/ferramentas usados em cada etapa, papéis/cargos responsáveis, critérios de aprovação/rejeição, prazos/SLAs, documentos ou dados de entrada e saída de cada etapa, regras de negócio, exceções, retrabalhos, validações, e qualquer número (percentual, valor, prazo) citado.
+        - Cada nó da versão 'detalhado' PODE (e deve, sempre que houver informação relevante disponível na fonte) preencher o campo opcional "notes" com um resumo curto e objetivo desse contexto extra que não cabe no label — ex.: sistema usado, responsável, critério de decisão, entradas/saídas, referência à regra do processo original. "notes" é livre (frase corrida, sem limite rígido de tamanho), mas deve ser específico e vir das informações fornecidas, nunca inventado genericamente.
+        - Onde o label de um nó de decisão ('decision') resumir uma regra, o "notes" deve trazer o critério exato usado para decidir (o número, a condição, o documento de referência) sempre que a fonte tiver essa informação.
+        - Não repita a mesma informação genérica em vários "notes" — cada um deve refletir o que é específico DAQUELA etapa.
+        - As versões 'simples' e 'normal' continuam sem "notes" (esse campo é exclusivo do 'detalhado', para não poluir as visões macro/tática).
 
         2. STRICT SHAPE CONSTRAINT (USER MANDATE):
         YOU MUST STRICTLY AND EXCLUSIVELY USE ONLY THE FOLLOWING ALLOWED NODE TYPES:
@@ -236,6 +245,13 @@ const generateDiagram = async (body: any, signal?: AbortSignal | null): Promise<
 
   const prompt = buildPrompt(body || {});
 
+  // O nível 'detalhado' agora pede o máximo de informação possível (mais
+  // nós, sem teto fixo, e um campo "notes" extra por nó) — a resposta fica
+  // bem mais longa, então o limite de saída da IA sobe para não cortar o
+  // JSONL no meio quando 'detalhado' está entre as versões pedidas.
+  const wantsDetalhado = Array.isArray(body?.complexities) && body.complexities.includes('detalhado');
+  const maxTokens = wantsDetalhado ? 24000 : undefined;
+
   // Cadeia de tentativas: o modo gratuito troca de modelo/endpoint sozinho
   // quando a cota pública falha; os demais tentam com e sem streaming.
   const attempts: ProviderAttempt[] = def.attempts || [
@@ -251,6 +267,7 @@ const generateDiagram = async (body: any, signal?: AbortSignal | null): Promise<
       const req = buildRequest(def, config, prompt, files, {
         stream: attempt.stream,
         signal,
+        maxTokens,
         endpointOverride: def.attempts ? attempt.endpoint : undefined,
         modelOverride: def.attempts ? attempt.model : undefined,
         kindOverride: def.attempts ? attempt.kind : undefined,

@@ -47,6 +47,28 @@ const fallbackMap = (requestedType, allowed) => allowed[0] || 'process';
   check('forma desconhecida cai no mapa de substituição', rawGenerated.normal.nodes[0].type === 'start');
 }
 
+// 4b. Campo "notes" (contexto extra do nível 'detalhado': sistema usado,
+//     responsável, critério da decisão, entradas/saídas) é preservado no
+//     timing do nó, igual ao "department" já era.
+{
+  const rawGenerated = { detalhado: { nodes: [], edges: [] } };
+  applyGeneratedJsonlLine(
+    '{"version": "detalhado", "node": {"id": "d1", "label": "Conferência Fiscal", "type": "process", "department": "Faturamento", "notes": "Sistema: ERP Fiscal. Responsável: Analista. Critério: divergência acima de 5% escala para o supervisor."}}',
+    rawGenerated,
+    ['process'],
+    fallbackMap,
+  );
+  check(
+    'notes do nó detalhado chega no timing',
+    rawGenerated.detalhado.nodes[0].data.timing.notes === 'Sistema: ERP Fiscal. Responsável: Analista. Critério: divergência acima de 5% escala para o supervisor.',
+  );
+}
+{
+  const rawGenerated = { normal: { nodes: [], edges: [] } };
+  applyGeneratedJsonlLine('{"version": "normal", "node": {"id": "n1", "label": "Sem notes", "type": "process"}}', rawGenerated, ['process'], fallbackMap);
+  check('nó sem notes vira string vazia (não undefined)', rawGenerated.normal.nodes[0].data.timing.notes === '');
+}
+
 // 4. Versão que não foi pedida é ignorada silenciosamente, sem lançar erro
 {
   const rawGenerated = { normal: { nodes: [], edges: [] } };

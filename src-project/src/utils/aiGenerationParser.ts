@@ -72,6 +72,7 @@ export function applyGeneratedJsonlLine(
           otherExtraTime: Number(data.node.otherExtraTime) || 0,
           department: data.node.department || '',
           status: 'pending',
+          notes: data.node.notes || '',
         },
         styleOverride:
           safeType === 'start' ? { backgroundColor: '#dcfce7', borderColor: '#22c55e' } :
