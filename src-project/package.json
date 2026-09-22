@@ -1,13 +1,13 @@
 {
   "name": "labirinto-fluxogramas",
   "private": true,
-  "version": "2.7.14",
+  "version": "2.7.15",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:test-helpers": "esbuild src/lib/labelPlacement.ts --format=esm --outfile=.tmp-labelPlacement.mjs && esbuild src/lib/spreadsheet.ts --format=esm --outfile=.tmp-spreadsheet.mjs && esbuild src/utils/manualEdgeGeometry.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-geom.mjs && esbuild src/utils/exportFormats.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-exportFormats.mjs && esbuild src/utils/aiGenerationParser.ts --bundle --format=esm --outfile=.tmp-aiParser.mjs && esbuild src/utils/sectorContainers.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-sectorContainers.mjs",
-    "test": "npm run build && npm run build:test-helpers && node tests/app.mjs && node tests/app.mjs --embedded && node tests/labels.mjs && node tests/spreadsheet.mjs && node tests/edges.mjs && node tests/routing.mjs && node tests/exportFormats.mjs && node tests/bizagiBpm.mjs && node tests/aiParser.mjs && node tests/sectorContainers.mjs",
+    "build:test-helpers": "esbuild src/lib/labelPlacement.ts --format=esm --outfile=.tmp-labelPlacement.mjs && esbuild src/lib/spreadsheet.ts --format=esm --outfile=.tmp-spreadsheet.mjs && esbuild src/utils/manualEdgeGeometry.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-geom.mjs && esbuild src/utils/exportFormats.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-exportFormats.mjs && esbuild src/utils/aiGenerationParser.ts --bundle --format=esm --outfile=.tmp-aiParser.mjs && esbuild src/utils/sectorContainers.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-sectorContainers.mjs && esbuild src/lib/aiBrowserBridge.ts --bundle --format=esm --outfile=.tmp-aiBridge.mjs",
+    "test": "npm run build && npm run build:test-helpers && node tests/app.mjs && node tests/app.mjs --embedded && node tests/labels.mjs && node tests/spreadsheet.mjs && node tests/edges.mjs && node tests/routing.mjs && node tests/exportFormats.mjs && node tests/bizagiBpm.mjs && node tests/aiParser.mjs && node tests/sectorContainers.mjs && node tests/aiPrompt.mjs",
     "test:app": "node tests/app.mjs",
     "test:embedded": "node tests/app.mjs --embedded"
   },

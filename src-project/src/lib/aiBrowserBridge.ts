@@ -97,8 +97,11 @@ export const buildPrompt = (body: any): string => {
         {"progress": 50}
         {"version": "detalhado", "node": {"id": "d1", "label": "Início", "type": "start", "duration": 0}}
         {"version": "detalhado", "node": {"id": "d2", "label": "Conferência de Documentos Fiscais Recebidos", "type": "process", "duration": 12, "department": "Faturamento", "notes": "Sistema: ERP Financeiro módulo Fiscal. Responsável: Analista de Faturamento. Critério: nota fiscal deve bater com o pedido de compra em valor, quantidade e CFOP. Exceção: divergência acima de 5% vai para aprovação do supervisor."}}
+        {"version": "detalhado", "edge": {"id": "e9", "source": "d7", "target": "d2", "label": "Reincide", "isDubious": true}}
         ...
         {"progress": 100}
+
+        Repare na linha de exemplo com "isDubious": true acima — é assim que você marca uma conexão da qual não tem certeza absoluta (ver seção 5.1), em vez de simplesmente não ligar os dois blocos.
         
         CRITICAL SHAPE RULE: The "type" of every node MUST be strictly one of the allowed node types: [${allowedStr}]. Do NOT invent or use unlisted shape types.
 
@@ -119,6 +122,27 @@ export const buildPrompt = (body: any): string => {
         - Onde o label de um nó de decisão ('decision') resumir uma regra, o "notes" deve trazer o critério exato usado para decidir (o número, a condição, o documento de referência) sempre que a fonte tiver essa informação.
         - Não repita a mesma informação genérica em vários "notes" — cada um deve refletir o que é específico DAQUELA etapa.
         - As versões 'simples' e 'normal' continuam sem "notes" (esse campo é exclusivo do 'detalhado', para não poluir as visões macro/tática).
+        - IMPORTANTE: nada do que está nesta seção 1.1 substitui ou reduz a obrigação da seção 3.2 (setores/raias). Preencher "department" em cada nó continua igualmente obrigatório sempre que houver setor/área/equipe mencionado, mesmo com o 'detalhado' tendo muito mais nós agora — não deixe esse campo passar em branco só porque há mais coisa pra gerar.
+
+        1.2. EXEMPLO OBRIGATÓRIO DE GRANULARIDADE (siga este padrão, não apenas o espírito dele):
+        Um parágrafo de origem como este:
+        "Após a organização dos volumes na esteira, o colaborador se desloca até o computador, acessa o sistema de recebimento e realiza a leitura individual de cada volume para gerar as etiquetas de Recebimento Agrupado. A cada volume bipado, o sistema gera a respectiva etiqueta, que é enviada para impressão. Após concluir as leituras, o colaborador recolhe as etiquetas impressas, identifica a caixa correspondente e aplica cada etiqueta no respectivo volume."
+
+        ERRADO (muito raso, isto NUNCA deve acontecer em 'detalhado' nem em 'normal'): virar um único nó "Etiquetagem de Volumes" e passar direto pra próxima etapa do processo maior.
+
+        CERTO para 'detalhado' — decomponha em cada ação atômica, incluindo o loop de retrabalho que o texto implica ("após concluir as leituras" = só depois de bipar TODOS; se faltar etiqueta em alguma caixa, tem que voltar e bipar/imprimir de novo):
+        1. "Acessar Computador para Bipar Volumes" (process)
+        2. "Bipar Etiqueta de Cada Volume no Sistema" (process)
+        3. "Recolher Etiquetas Impressas" (process)
+        4. "Colar Etiquetas nas Caixas Correspondentes" (process)
+        5. "Todas as Caixas Estão com Etiquetas Coladas?" (decision) → "Sim" segue pra próxima etapa do processo maior; "Não" volta pro passo 2 (bipar/imprimir a etiqueta que faltou), formando um loop até a resposta virar "Sim".
+
+        CERTO para 'normal' — mesmo parágrafo, mas resumido em bem menos etapas (só o essencial, sem cada microação):
+        1. "Bipar Volumes para Imprimir Etiquetas" (process)
+        2. "Colar Etiquetas nas Caixas" (process)
+        3. "Todas as Etiquetas Estão Coladas?" (decision) → "Sim"/"Não" (loop de volta se "Não")
+
+        Aplique este MESMO nível de decomposição a CADA parágrafo/trecho do prompt ou arquivo do usuário — não só ao exemplo acima. Se um trecho do texto de origem descreve várias ações em sequência dentro de uma mesma etapa (colaborador faz X, depois Y, depois verifica Z), cada uma dessas ações vira o próprio nó em 'detalhado', não um resumo genérico da etapa inteira. Uma verificação implícita no texto ("após concluir todas as leituras", "confere se está tudo certo", "garante que X bateu com Y") quase sempre é uma pergunta/decisão que falta no diagrama — adicione o losango correspondente em vez de pular direto pra próxima etapa.
 
         2. STRICT SHAPE CONSTRAINT (USER MANDATE):
         YOU MUST STRICTLY AND EXCLUSIVELY USE ONLY THE FOLLOWING ALLOWED NODE TYPES:
@@ -163,6 +187,13 @@ export const buildPrompt = (body: any): string => {
         - EVERY node except "start" MUST have at least 1 incoming edge.
         - EVERY node except "end" MUST have at least 1 outgoing edge.
         - NEVER leave orphaned nodes. All labels MUST be in Portuguese (PT-BR).
+
+        5.1. CONECTIVIDADE GLOBAL DO FLUXO (CRITICAL — erro grave e recorrente a evitar):
+        - Não basta cada nó ter ALGUMA entrada/saída (regra 5 acima) — o diagrama INTEIRO de cada versão precisa ser UM SÓ fluxo conectado, do "start" até o(s) "end". É um ERRO GRAVE gerar vários blocos de etapas que se conectam bem entre si mas formam "ilhas" separadas, sem ligação nenhuma entre um bloco e outro.
+        - Antes de terminar cada versão, confira mentalmente: dá pra percorrer do "start" até TODO nó do diagrama, e de TODO nó até algum "end"? Se existe um bloco de etapas que não tem NENHUM caminho vindo do restante do fluxo (nem indo pra ele), você esqueceu de ligá-lo — não é uma etapa "à parte", é uma etapa que falta conectar.
+        - Pra ligar os blocos: identifique onde o bloco lógico começa (qual etapa do restante do processo leva até a primeira ação dele) e onde termina (pra qual etapa seguinte do restante do processo o resultado dele segue). Quase sempre essa ligação existe implicitamente no texto de origem (ex.: "depois de etiquetadas, as caixas seguem para separação" — é o gancho que liga o bloco de etiquetagem ao bloco de separação).
+        - Se depois de reler o texto você ainda ficar em DÚVIDA sobre o ponto exato onde dois blocos se conectam (qual etapa específica de um liga com qual etapa específica do outro), NÃO deixe as duas partes soltas e também não invente uma ligação sem base nenhuma: crie a aresta com sua MELHOR estimativa e marque essa aresta com "isDubious": true (ver exemplo no formato JSONL acima) — o app destaca essa linha em vermelho pra o usuário validar se está correta, em vez de o diagrama ficar com blocos desconectados.
+        - A ÚNICA exceção pra deixar fluxos genuinamente separados (sem ligação nenhuma) é quando o texto de origem deixa EXPLÍCITO que são processos totalmente distintos e independentes (ex.: "Processo A: ... Processo B, sem relação com o A: ..."). Fora esse caso explícito, o padrão é sempre assumir que tudo faz parte do MESMO processo e deve estar conectado — inclusive entre departamentos/raias diferentes (a passagem de bastão entre setores é exatamente o tipo de conexão que não pode faltar).
 
         6. LABELS (CRITICAL):
         - Labels devem ser DESCRITIVOS, COMPLETOS e PROFISSIONAIS, entre 20 e 70 caracteres.
