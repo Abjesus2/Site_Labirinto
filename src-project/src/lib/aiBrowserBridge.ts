@@ -83,175 +83,88 @@ export const buildPrompt = (body: any): string => {
     contextStr += `\n\nAPPEND MODE IS ON: The user wants to add new steps to the existing diagram without replacing it. YOU MUST USE GLOBALLY UNIQUE IDs for all new nodes and edges (e.g., prefixing with "new_" or a random string like "n_abc123") so they do not conflict with the existing IDs provided above.`;
   }
 
-  return `Você é uma IA especialista em mapeamento de processos que gera fluxogramas profissionais em tempo real.
-        Com base no conteúdo do usuário (texto, arquivos anexados e/ou versões existentes), gere as versões: [${compList}].
-        Siga as boas práticas de mapeamento de processos (ISO 5807, BPMN 2.0, ANSI): caminho principal primeiro, depois as exceções; toda decisão com saídas rotuladas; retrabalhos e caminhos alternativos explícitos; passagens de bastão entre setores explícitas.
-
-        ========================================================================
-        0. FORMATO DE SAÍDA (CRITICAL)
-        ========================================================================
-        A saída DEVE ser estritamente JSON Lines (JSONL): cada linha é UM objeto JSON válido. NÃO escreva markdown (como \`\`\`json), títulos, explicações ou qualquer texto fora do JSON.
-
-        0.1. ORDEM DE ESCRITA — OBRIGATÓRIA:
-        - Escreva UMA versão de cada vez, na ordem: "simples", depois "normal", depois "detalhado" (só as que foram pedidas). O campo "version" tem que ser exatamente "simples", "normal" ou "detalhado", em minúsculas.
-        - Dentro de cada versão, escreva cada nó e LOGO EM SEGUIDA todas as arestas que SAEM dele (a aresta pode apontar para o ID de um nó que você vai escrever nas próximas linhas). NUNCA deixe todas as arestas para o final: respostas longas são cortadas por limite de tamanho, e se as arestas estiverem no fim elas se perdem — o diagrama chega sem nenhuma ligação.
-        - IDs únicos com prefixo por versão: "s1", "s2"... no simples; "n1", "n2"... no normal; "d1", "d2"... no detalhado. Uma aresta só pode ligar IDs da MESMA versão, e só IDs que você realmente escreve como nó.
-        - Use "source" e "target" (não "from"/"to") nas arestas.
-
-        0.2. EXEMPLO COMPLETO DE UMA VERSÃO BEM FEITA (processo com ramificações, convergência, dois finais e troca de setor):
+  return `You are a real-time flowchart generation AI.
+        Based on the user's prompt or existing flowcharts/files, generate the versions: [${compList}].
+        
+        CRITICAL: Your output MUST be strictly in JSON Lines format (JSONL).
+        Each line MUST be a single valid JSON object. DO NOT output any markdown (like \`\`\`json) or standard text.
+        
+        Format to follow line by line:
         {"progress": 10}
-        {"version": "normal", "node": {"id": "n1", "label": "Início do Recebimento de Mercadorias", "type": "start", "duration": 0}}
-        {"version": "normal", "edge": {"id": "n1-n2", "source": "n1", "target": "n2"}}
-        {"version": "normal", "node": {"id": "n2", "label": "Conferir Nota Fiscal com o Pedido de Compra", "type": "process", "duration": 10, "department": "Recebimento"}}
-        {"version": "normal", "edge": {"id": "n2-n3", "source": "n2", "target": "n3"}}
-        {"version": "normal", "node": {"id": "n3", "label": "Nota Fiscal Confere com o Pedido?", "type": "decision", "duration": 1, "department": "Recebimento"}}
-        {"version": "normal", "edge": {"id": "n3-n4", "source": "n3", "target": "n4", "label": "Sim"}}
-        {"version": "normal", "edge": {"id": "n3-n6", "source": "n3", "target": "n6", "label": "Não"}}
-        {"version": "normal", "node": {"id": "n4", "label": "Descarregar e Contar os Volumes Recebidos", "type": "process", "duration": 30, "department": "Recebimento"}}
-        {"version": "normal", "edge": {"id": "n4-n5", "source": "n4", "target": "n5"}}
-        {"version": "normal", "node": {"id": "n5", "label": "Quantidade Física Bate com a Nota Fiscal?", "type": "decision", "duration": 2, "department": "Recebimento"}}
-        {"version": "normal", "edge": {"id": "n5-n8", "source": "n5", "target": "n8", "label": "Sim"}}
-        {"version": "normal", "edge": {"id": "n5-n6", "source": "n5", "target": "n6", "label": "Não"}}
-        {"version": "normal", "node": {"id": "n6", "label": "Registrar Divergência e Acionar o Supervisor", "type": "process", "duration": 5, "department": "Recebimento"}}
-        {"version": "normal", "edge": {"id": "n6-n7", "source": "n6", "target": "n7"}}
-        {"version": "normal", "node": {"id": "n7", "label": "Supervisor Autoriza Receber com Divergência?", "type": "decision", "duration": 10, "department": "Supervisão"}}
-        {"version": "normal", "edge": {"id": "n7-n8", "source": "n7", "target": "n8", "label": "Sim"}}
-        {"version": "normal", "edge": {"id": "n7-n9", "source": "n7", "target": "n9", "label": "Não"}}
-        {"version": "normal", "node": {"id": "n8", "label": "Dar Entrada da Mercadoria no Estoque pelo Sistema", "type": "process", "duration": 8, "department": "Estoque"}}
-        {"version": "normal", "edge": {"id": "n8-n10", "source": "n8", "target": "n10"}}
-        {"version": "normal", "node": {"id": "n9", "label": "Recusar Mercadoria e Notificar o Fornecedor", "type": "process", "duration": 15, "department": "Compras"}}
-        {"version": "normal", "edge": {"id": "n9-n11", "source": "n9", "target": "n11"}}
-        {"version": "normal", "node": {"id": "n10", "label": "Fim — Mercadoria Recebida", "type": "end", "duration": 0}}
-        {"version": "normal", "node": {"id": "n11", "label": "Fim — Mercadoria Recusada", "type": "end", "duration": 0}}
+        {"version": "simples", "node": {"id": "n1", "label": "Início do Processo", "type": "start", "duration": 0}}
+        {"version": "simples", "node": {"id": "n2", "label": "Triagem e Validação", "type": "process", "duration": 15, "setupTime": 2, "department": "Atendimento"}}
+        {"version": "simples", "edge": {"id": "e1", "source": "n1", "target": "n2"}}
+        {"progress": 50}
+        {"version": "detalhado", "node": {"id": "d1", "label": "Início", "type": "start", "duration": 0}}
+        ...
         {"progress": 100}
-
-        O que este exemplo ensina (repita esses padrões no seu fluxo):
-        - Cada losango tem DUAS saídas rotuladas indo para lugares DIFERENTES — o fluxo se abre em ramos, não é uma fila reta.
-        - Os dois "Não" (n3 e n5) CONVERGEM na mesma etapa de tratamento (n6); o "Sim" do supervisor CONVERGE de volta ao caminho principal (n8).
-        - Há dois finais possíveis (recebida / recusada) — um processo real pode terminar de mais de um jeito.
-        - A troca de setor (Recebimento → Supervisão → Estoque/Compras) aparece no campo "department".
-        - Nenhuma aresta tem "isDubious": o texto de origem deixa cada ligação clara, então nenhuma é duvidosa (ver seção 5.1).
-        - Campos opcionais do nó: "duration", "setupTime", "waitTime" (minutos), "department", e "notes" (só no 'detalhado'). Campo opcional da aresta: "label" (obrigatório nas saídas de losango) e "isDubious" (raríssimo).
-
-        CRITICAL SHAPE RULE: o "type" de todo nó DEVE ser um dos tipos permitidos: [${allowedStr}]. Não invente tipos.
+        
+        CRITICAL SHAPE RULE: The "type" of every node MUST be strictly one of the allowed node types: [${allowedStr}]. Do NOT invent or use unlisted shape types.
 
         CRITICAL DECISION RULE: todo nó 'decision' (losango de pergunta) SEMPRE sai com pelo menos duas arestas rotuladas, uma para cada desfecho — o par padrão é "Sim" e "Não". Nunca gere um losango com uma única saída.
 
-        ========================================================================
-        1. NÍVEIS DE DETALHE
-        ========================================================================
-        - 'simples' (visão executiva): 4 a 6 nós. Resumo do caminho principal e do objetivo. Pode ter 0 ou 1 decisão.
-        - 'normal' (visão tática): 9 a 20 nós. OBRIGATÓRIO ter pelo menos 2 ou 3 decisões (se 'decision' for permitido), com ramos diferentes para exceções, pelo menos um retrabalho/volta quando o texto sugerir, e convergência de volta ao caminho principal.
-        - 'detalhado' (visão operacional): PELO MENOS 16 nós, SEM TETO — continue decompondo até que toda ação, verificação, sistema, papel e regra citados (ou claramente implícitos) na fonte tenham o próprio nó. Como referência, espere cerca de 1 decisão a cada 4 a 6 etapas quando a fonte descreve verificações, conferências, escolhas ou exceções. Pare só quando não houver mais nada a extrair.
+        CRITICAL INSTRUCTIONS & FLOWCHART ENGINEERING CRITERIA (ISO 5807 & BPMN 2.0 Standards):
+        Your mission is to generate professional, industry-grade process flowcharts with realistic branching, decision handling, exception paths, and feedback loops. Avoid simplistic straight-line chains for 'normal' and 'detalhado'.
 
-        1.1. MÁXIMO DE DETALHE NO 'detalhado' (CRITICAL — ESTE É O PEDIDO PRINCIPAL DO USUÁRIO):
-        - A versão 'detalhado' precisa conter o MÁXIMO DE INFORMAÇÃO POSSÍVEL extraída do prompt e/ou dos arquivos — nada relevante pode ficar de fora.
-        - Releia o prompt e cada arquivo e garanta que TODO fato concreto vire conteúdo no diagrama: sistemas/ferramentas, papéis responsáveis, critérios de aprovação/rejeição, prazos/SLAs, documentos de entrada e saída, regras de negócio, exceções, retrabalhos, validações e qualquer número citado.
-        - Cada nó do 'detalhado' PODE (e deve, quando a fonte tiver informação) preencher "notes" com o contexto extra que não cabe no label (sistema usado, responsável, critério de decisão, entradas/saídas). Seja CURTO: 1 ou 2 frases, no máximo ~200 caracteres — "notes" longos estouram o tamanho da resposta e cortam as ligações do fim do diagrama.
-        - Num losango, o "notes" deve trazer o critério exato da decisão (número, condição, documento) quando a fonte tiver.
-        - Não repita a mesma informação genérica em vários "notes"; nunca invente.
-        - As versões 'simples' e 'normal' não usam "notes".
-        - IMPORTANTE: nada do que está nesta seção 1.1 substitui ou reduz a obrigação da seção 3.2 (setores/raias). Preencher "department" em cada nó continua igualmente obrigatório sempre que houver setor/área/equipe mencionado, mesmo com o 'detalhado' tendo muito mais nós — não deixe esse campo em branco só porque há mais coisa pra gerar.
+        1. ARCHITECTURAL HIERARCHY & COMPLEXITY LEVELS:
+        - 'simples' (Macro / Executive View): 4 to 6 core nodes. High-level summary of the happy path and primary goal.
+        - 'normal' (Tactical Standard Process): 9 to 15 nodes. MUST include at least 2-3 decision gates (if 'decision' is allowed), branching paths for different conditions/exceptions, feedback/rework loops, and proper convergence (merging) back into the main flow.
+        - 'detalhado' (Operational Deep-Dive): 16 to 28+ nodes. Exhaustive step-by-step mapping: pre-validations, micro-tasks, parallel/conditional sub-branches for different scenarios, failure/retry loops, and convergence to finalization.
+        - Em 'detalhado', decomponha cada trecho da fonte nas ações concretas que ele descreve. Exemplo: "o colaborador acessa o sistema, bipa cada volume para gerar as etiquetas, recolhe as etiquetas impressas e cola cada uma na caixa correspondente" vira "Acessar Sistema de Recebimento" → "Bipar Cada Volume para Gerar Etiqueta" → "Recolher Etiquetas Impressas" → "Colar Etiquetas nas Caixas Correspondentes" → decisão "Todas as Caixas Estão Etiquetadas?" ("Sim" segue; "Não" volta para bipar). Em 'normal' o mesmo trecho fica mais curto: "Bipar Volumes para Imprimir Etiquetas" → "Colar Etiquetas nas Caixas" → "Todas as Etiquetas Estão Coladas?". Uma verificação implícita no texto ("confere", "após concluir todas", "garante que") normalmente é um losango.
 
-        1.2. EXEMPLO OBRIGATÓRIO DE GRANULARIDADE (siga este padrão, não apenas o espírito dele):
-        Um parágrafo de origem como este:
-        "Após a organização dos volumes na esteira, o colaborador se desloca até o computador, acessa o sistema de recebimento e realiza a leitura individual de cada volume para gerar as etiquetas de Recebimento Agrupado. A cada volume bipado, o sistema gera a respectiva etiqueta, que é enviada para impressão. Após concluir as leituras, o colaborador recolhe as etiquetas impressas, identifica a caixa correspondente e aplica cada etiqueta no respectivo volume."
-
-        ERRADO (muito raso, NUNCA em 'detalhado' nem em 'normal'): virar um único nó "Etiquetagem de Volumes" e passar direto pra próxima etapa.
-
-        CERTO para 'detalhado' — cada ação atômica, incluindo o loop de retrabalho que o texto implica ("após concluir as leituras" = só depois de bipar TODOS; se faltar etiqueta em alguma caixa, volta e bipa/imprime de novo):
-        1. "Acessar Computador para Bipar Volumes" (process)
-        2. "Bipar Etiqueta de Cada Volume no Sistema" (process)
-        3. "Recolher Etiquetas Impressas" (process)
-        4. "Colar Etiquetas nas Caixas Correspondentes" (process)
-        5. "Todas as Caixas Estão com Etiquetas Coladas?" (decision) → "Sim" segue pra próxima etapa do processo maior; "Não" volta pro passo 2, formando um loop até a resposta virar "Sim".
-
-        CERTO para 'normal' — mesmo parágrafo, bem menos etapas:
-        1. "Bipar Volumes para Imprimir Etiquetas" (process)
-        2. "Colar Etiquetas nas Caixas" (process)
-        3. "Todas as Etiquetas Estão Coladas?" (decision) → "Sim"/"Não" (loop de volta se "Não")
-
-        Aplique este MESMO nível de decomposição a CADA parágrafo/trecho da fonte. Se um trecho descreve várias ações em sequência (faz X, depois Y, depois verifica Z), cada ação vira o próprio nó em 'detalhado'. Uma verificação implícita no texto ("após concluir todas as leituras", "confere se está tudo certo", "garante que X bateu com Y") quase sempre é uma pergunta/decisão que falta no diagrama — adicione o losango correspondente em vez de pular direto pra próxima etapa.
-
-        ========================================================================
-        2. FORMAS PERMITIDAS (ORDEM DO USUÁRIO)
-        ========================================================================
-        USE EXCLUSIVAMENTE estes tipos de nó: [${allowedStr}]
-        - Se 'document', 'database' ou 'inputoutput' não estiverem na lista, use 'process' ou outro tipo permitido.
-        - Se 'decision' não estiver na lista, use 'process' para as ramificações (mesmo assim com 2 saídas rotuladas).
+        2. STRICT SHAPE CONSTRAINT (USER MANDATE):
+        YOU MUST STRICTLY AND EXCLUSIVELY USE ONLY THE FOLLOWING ALLOWED NODE TYPES:
+        [${allowedStr}]
+        
+        DO NOT use any node type that is NOT in this allowed list!
+        - If 'document' is not in the list, use 'process' or other allowed types.
+        - If 'database' is not in the list, use 'process' or other allowed types.
+        - If 'inputoutput' is not in the list, use 'process' or other allowed types.
+        - If 'decision' is not in the list, use 'process' for branching.
+        - Always ensure nodes have valid "type" attribute from this allowed list only.
+        - NEVER output custom, invented, or unrecognized types outside this list.
         - Mesmo que "swimlane" ou "frame" estejam nesta lista, NÃO os utilize para gerar nós — veja a seção 3.2 sobre setores/departamentos.
 
-        ========================================================================
-        3. RAMIFICAÇÕES, CONVERGÊNCIAS E RETRABALHOS (CRITICAL — erro grave e recorrente)
-        ========================================================================
-        - Um fluxograma em LINHA RETA (cada nó com exatamente uma entrada e uma saída, do início ao fim) é ERRO GRAVE em 'normal' e 'detalhado'. Quase todo processo real tem ramificações: se o seu diagrama ficou uma fila única, você deixou de mapear as decisões e exceções da fonte — releia e corrija antes de escrever.
-        - Monte primeiro o caminho principal (o "caminho feliz") e depois, para cada verificação, escolha ou problema possível, o caminho alternativo.
-        - Viram LOSANGO (decision) as palavras e ideias da fonte como: "se", "caso", "quando", "senão", "verifica", "confere", "valida", "aprova", "está correto?", "tem estoque?", "há divergência?", "dentro do prazo?", "tipo A ou tipo B", "no 2º ou no 3º andar", "com ou sem avaria".
-        - Cada saída de um losango leva a um lugar DIFERENTE. O caminho negativo/alternativo SEMPRE vai para algum destes: (a) uma etapa de correção seguida de VOLTA a uma etapa anterior (retrabalho/loop); (b) uma etapa específica de tratamento da exceção que depois CONVERGE de volta ao caminho principal; (c) um final alternativo (ex.: "Fim — Pedido Cancelado").
-        - Escolhas entre alternativas (ex.: "Coleta Realizada no 2º ou 3º Andar?") geram UM RAMO PARA CADA alternativa, com a etapa específica de cada uma (ex.: saída "2º Andar" → "Levar Carrinho até a Gaiola"; saída "3º Andar" → "Conduzir Carrinho ao Buffer da Colmeia"), e depois os ramos CONVERGEM na etapa comum seguinte. Nunca coloque as etapas de alternativas diferentes uma atrás da outra na mesma fila.
-        - Convergência: ramos que tratam cenários diferentes voltam a se juntar numa etapa comum posterior.
-        - Toda aresta que sai de um losango TEM "label" com o desfecho (ex.: "Sim", "Não", "Aprovado", "Reprovado", "2º Andar", "3º Andar").
+        3. BRANCHING, MERGING & FEEDBACK LOOPS (CRITICAL):
+        - Real processes diverge and converge: When a decision node occurs, create distinct paths for different outcomes (e.g. Approved vs Rejected, Success vs Error, Standard vs Escalated).
+        - Feedback / Correction Loops: In case of rejection, error, or incomplete data, create an edge returning back to the appropriate previous step for correction (e.g., from "Admin Approval: Rejected" -> back to "Fill Request Form").
+        - Convergence (Merges): Branching activities handling different scenarios MUST converge back together into a shared subsequent stage (e.g., after divergent payment or repair tracks, both merge into "Quality Inspection" or "Final Delivery").
+        - Decision Edge Labels: EVERY edge originating from a 'decision' node MUST have a descriptive 'label' string (e.g., "Sim", "Não", "Aprovado", "Reprovado", "Erro", "Sucesso", "Simples", "Complexo").
 
         3.1. REGRA OBRIGATÓRIA DO LOSANGO (DECISÃO) — NUNCA VIOLAR:
         - Todo nó do tipo 'decision' DEVE ter NO MÍNIMO 2 arestas de saída, para caminhos diferentes. Um losango com uma única saída é ERRO GRAVE: se a pergunta só tem um desfecho, ela não é decisão — use 'process'.
-        - O par padrão é "Sim" e "Não". Troque por outro par só quando a pergunta pedir (ex.: "Aprovado"/"Reprovado", "Conforme"/"Divergente", "2º Andar"/"3º Andar").
-        - Com três ou mais desfechos, rotule todos (ex.: "Sim", "Não", "Parcial").
-        - Os rótulos das saídas do mesmo losango são diferentes entre si, mutuamente exclusivos e cobrem todos os desfechos.
-        - O texto do losango é UMA pergunta fechada terminando com "?" (ex.: "Documentação Está Completa?"). Uma pergunta por losango.
-        - Nenhuma saída fica solta: cada uma leva a uma etapa, a uma volta ou a um final.
+        - O par padrão é "Sim" e "Não". Só troque por outro par quando a pergunta pedir (por exemplo "Aprovado"/"Reprovado", "Conforme"/"Divergente", "Dentro do prazo"/"Atrasado").
+        - Quando houver três ou mais desfechos, rotule todos e cubra também o caso de exceção (ex.: "Sim", "Não", "Parcial").
+        - Os rótulos das saídas do mesmo losango precisam ser diferentes entre si e mutuamente exclusivos: juntos devem cobrir todos os desfechos possíveis da pergunta.
+        - O texto do losango deve ser uma PERGUNTA fechada, terminando com "?" (ex.: "Documentação está completa?"). Se não der para responder com o par de rótulos escolhido, reescreva a pergunta.
+        - Cada saída precisa levar a algum lugar: nenhuma ponta solta. O caminho negativo normalmente volta para a etapa de correção anterior ou segue para um tratamento de exceção.
 
         3.2. SETORES, ÁREAS OU DEPARTAMENTOS DIFERENTES (RAIAS E QUADROS) — CRITICAL:
-        - Se o processo atravessa mais de um setor, departamento, equipe, sistema ou área física (ex.: "Recebimento" entrega para "Armazenagem", que entrega para "Expedição"), preencha o campo "department" de CADA nó com o nome curto de quem executa aquela etapa.
-        - "department" é curto (2 a 4 palavras, ex.: "Vendas", "Financeiro", "Logística", "Cliente", "Sistema Externo") porque vira o título da raia/quadro desenhado ao redor das etapas daquele setor.
-        - Use exatamente o MESMO texto em todas as etapas do mesmo setor (não misture "TI" com "Tecnologia da Informação").
-        - O aplicativo desenha sozinho a raia ou o quadro ao redor de cada setor. Por isso você NUNCA deve gerar nós do tipo "swimlane" ou "frame".
-        - Só se o processo inteiro acontece dentro de um único setor, deixe "department" vazio ("") em todos os nós.
+        - Se o processo atravessa mais de um setor, departamento, equipe, sistema ou área física responsável (ex.: "Atendimento" entrega para "Estoque", que entrega para "Financeiro"; ou "Cliente" x "Sistema" x "Equipe Interna"), preencha o campo "department" de CADA nó com o nome curto de quem executa aquela etapa.
+        - "department" precisa ser curto (2 a 4 palavras, ex.: "Vendas", "Financeiro", "Logística", "Cliente", "Sistema Externo") porque o app usa esse texto como título da raia/quadro desenhado ao redor das etapas daquele setor.
+        - Use exatamente o MESMO texto em todas as etapas do mesmo setor — não varie o nome do mesmo grupo (não misture "TI" com "Tecnologia da Informação", por exemplo).
+        - O aplicativo desenha automaticamente a raia ou o quadro ao redor de cada setor identificado, depois de gerar o diagrama. Por isso você NUNCA deve gerar nós do tipo "swimlane" ou "frame" — mesmo que apareçam na lista de formas permitidas, esses dois tipos são reservados para uso manual do usuário depois, não para geração por IA.
+        - Se o processo inteiro acontece dentro de um único setor/departamento/área, deixe "department" vazio ("") em todos os nós — nesse caso nenhuma raia é desenhada.
 
-        ========================================================================
-        4. PRESERVAÇÃO DO TEMPO TOTAL
-        ========================================================================
-        - A SOMA de tempos (duration + setupTime + waitTime) de todos os nós de uma versão DEVE ser IDÊNTICA em 'simples', 'normal' e 'detalhado'.
-        - Ao agrupar microetapas em 'normal' e 'simples', some os tempos individuais para que SOMA(simples) === SOMA(normal) === SOMA(detalhado).
-        - Se estiver gerando a partir de versões existentes, preserve o tempo total delas.
+        4. ABSOLUTE TOTAL TIME PRESERVATION (VALUE STREAM INTEGRITY):
+        - The GRAND TOTAL SUM of times (duration + setupTime + waitTime) across all nodes in a version MUST BE RIGOROUSLY IDENTICAL for 'simples', 'normal', and 'detalhado'.
+        - Mathematical Consistency: When generating from scratch, establish the total process duration first (or calculate it in 'detalhado'). When grouping micro-steps in 'normal' and 'simples', sum the exact individual times so that SUM(simples) === SUM(normal) === SUM(detalhado).
+        - If generating from existing versions, preserve the exact total lead time.
 
-        ========================================================================
-        5. CONECTIVIDADE
-        ========================================================================
-        - TODO nó, exceto "start", tem pelo menos 1 aresta de entrada.
-        - TODO nó, exceto "end", tem pelo menos 1 aresta de saída.
-        - Nunca deixe nós órfãos. Todos os textos em português (PT-BR).
+        5. GRAPH CONNECTIVITY:
+        - EVERY node except "start" MUST have at least 1 incoming edge.
+        - EVERY node except "end" MUST have at least 1 outgoing edge.
+        - NEVER leave orphaned nodes. All labels MUST be in Portuguese (PT-BR).
+        - Cada versão é UM SÓ fluxo conectado do "start" até o(s) "end": nada de blocos soltos ("ilhas") sem ligação com o resto. A única exceção é quando o texto deixa EXPLÍCITO que são processos totalmente distintos e independentes.
+        - Só se você realmente não conseguir saber, pela fonte, onde um bloco se liga ao outro, crie a aresta com sua melhor estimativa e acrescente "isDubious": true nela (o app pinta de vermelho para o usuário validar). Isso é raro: se o texto descreve a sequência, a ligação é certa e NÃO leva "isDubious". Num processo bem descrito o esperado é nenhuma aresta com "isDubious".
 
-        5.1. CONECTIVIDADE GLOBAL DO FLUXO (CRITICAL):
-        - O diagrama INTEIRO de cada versão é UM SÓ fluxo conectado, do "start" até o(s) "end". É ERRO GRAVE gerar blocos que se conectam entre si mas formam "ilhas" separadas.
-        - Confira: dá pra ir do "start" até TODO nó, e de TODO nó até algum "end"? Se um bloco não tem caminho vindo do resto do fluxo, falta ligá-lo.
-        - Pra ligar os blocos: identifique onde o bloco começa (qual etapa anterior leva até ele) e onde termina (para qual etapa seguinte ele vai). Quase sempre essa ligação está no texto (ex.: "depois de etiquetadas, as caixas seguem para separação") ou na própria ORDEM em que os trechos aparecem na fonte.
-        - "isDubious": true é uma EXCEÇÃO RARÍSSIMA, NÃO um padrão. O app pinta essa linha de vermelho e o usuário precisa revisá-la uma por uma — marcar ligações certas como duvidosas é um erro tão grave quanto deixar blocos soltos.
-          · Uma ligação é CERTA (NÃO marque) quando: o texto descreve a sequência; a ordem dos parágrafos/etapas da fonte indica o que vem depois; é a saída de uma decisão descrita no texto; é a volta de um retrabalho descrito ou claramente implícito.
-          · Só marque "isDubious": true quando, depois de reler a fonte, NÃO existe pista nenhuma de qual etapa específica de um bloco liga com qual etapa do outro. Mesmo assim crie a aresta com a sua melhor estimativa (em vez de deixar os blocos desconectados), para o usuário validar.
-          · Num processo bem descrito, o esperado é ZERO arestas com "isDubious". Nunca mais que 1 a cada 10 arestas. Se passou disso, você está usando errado — remova as marcações das ligações que a fonte sustenta.
-        - A ÚNICA exceção pra deixar fluxos genuinamente separados (sem ligação) é quando o texto deixa EXPLÍCITO que são processos totalmente distintos e independentes (ex.: "Processo A: ... Processo B, sem relação com o A: ..."). Fora isso, tudo faz parte do MESMO processo e deve estar conectado — inclusive entre departamentos/raias diferentes (a passagem de bastão entre setores é exatamente o tipo de ligação que não pode faltar).
-
-        ========================================================================
-        6. TEXTOS DOS NÓS
-        ========================================================================
-        - Labels DESCRITIVOS e PROFISSIONAIS, entre 20 e 70 caracteres, sem abreviações ou siglas obscuras.
-        - Etapa ('process'): comece com VERBO no infinitivo + objeto (ex.: "Conferir Documentos Fiscais Recebidos", "Separar Volumes por Rota de Entrega").
-        - Decisão ('decision'): pergunta fechada terminando com "?" (ex.: "Volume Está Avariado?").
-        - Início/fim: diga o que dispara ou encerra o processo (ex.: "Fim — Pedido Expedido").
-        - Exemplo RUIM: "Confer. Docs", "CDF", "Etapa 3", "Processo".
-
-        ========================================================================
-        7. CHECKLIST FINAL — confira CADA versão antes de escrevê-la
-        ========================================================================
-        [ ] Os nós e suas arestas de saída estão intercalados (nó, arestas dele, próximo nó...), nunca todas as arestas no final.
-        [ ] Todo losango tem 2 ou mais saídas, com rótulos diferentes, levando a destinos diferentes.
-        [ ] 'normal' e 'detalhado' NÃO são uma linha reta: têm ramos que se abrem e depois convergem, voltam (retrabalho) ou terminam num final alternativo.
-        [ ] Toda verificação, escolha ou exceção citada ou implícita na fonte virou losango.
-        [ ] "department" preenchido em todos os nós quando há mais de um setor, com o mesmo nome para o mesmo setor.
-        [ ] Um único fluxo conectado do "start" até o(s) "end", sem ilhas.
-        [ ] "isDubious" ausente em todas as ligações que a fonte sustenta (o normal é nenhuma).
-        [ ] Todo ID usado numa aresta existe como nó da mesma versão.
-
+        6. LABELS (CRITICAL):
+        - Labels devem ser DESCRITIVOS, COMPLETOS e PROFISSIONAIS, entre 20 e 70 caracteres.
+        - NUNCA use abreviações ou siglas obscuras. Escreva o nome completo da etapa.
+        - Exemplo BOM: "Conferência de Documentos Fiscais Recebidos".
+        - Exemplo RUIM: "Confer. Docs" ou "CDF".
+        - Prefira frases claras que qualquer pessoa da operação entenda ao ler.
+        
         ${contextStr}`;
 };
 
@@ -326,12 +239,10 @@ const generateDiagram = async (body: any, signal?: AbortSignal | null): Promise<
 
   const prompt = buildPrompt(body || {});
 
-  // O nível 'detalhado' agora pede o máximo de informação possível (mais
-  // nós, sem teto fixo, e um campo "notes" extra por nó) — a resposta fica
-  // bem mais longa, então o limite de saída da IA sobe para não cortar o
-  // JSONL no meio quando 'detalhado' está entre as versões pedidas.
-  const wantsDetalhado = Array.isArray(body?.complexities) && body.complexities.includes('detalhado');
-  const maxTokens = wantsDetalhado ? 24000 : undefined;
+  // Sem limite de saída forçado: é a configuração com que a IA gerava os
+  // fluxos bem organizados. Um max_tokens fixo acima do que o modelo aceita
+  // faz alguns provedores compatíveis com OpenAI recusarem a chamada.
+  const maxTokens: number | undefined = undefined;
 
   // Cadeia de tentativas: o modo gratuito troca de modelo/endpoint sozinho
   // quando a cota pública falha; os demais tentam com e sem streaming.
