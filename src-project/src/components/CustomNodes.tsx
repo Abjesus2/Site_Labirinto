@@ -143,12 +143,26 @@ export const EditableNodeLabel = ({
     }
   }, [isEditingManual, isNavigationMode]);
 
+  // Ao abrir a edição, o cursor vai para o fim do texto (antes selecionava
+  // tudo, e como o clique do mouse não funcionava dentro do campo, só dava
+  // para sair da seleção pelas setas do teclado). Ctrl+A continua
+  // selecionando tudo, se for o caso.
   useEffect(() => {
     if (isEditing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
+      const el = inputRef.current;
+      el.focus();
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
     }
   }, [isEditing]);
+
+  // Campo cresce com o texto (sem barra de rolagem interna).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!isEditing || !el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(64, el.scrollHeight + 2)}px`;
+  }, [isEditing, text]);
 
   const saveText = () => {
     setIsEditing(false);
@@ -184,16 +198,26 @@ export const EditableNodeLabel = ({
 
   if (isEditing) {
     return (
-      <div className="w-full relative z-30 pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="w-full relative z-30 pointer-events-auto nodrag nopan nowheel"
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        {/* "nodrag"/"nopan": sem isso o React Flow tratava o clique dentro do
+            campo como início de arraste da forma e engolia o clique — não
+            dava para posicionar o cursor nem selecionar parte do texto com o
+            mouse. Campo mais largo que a forma (mín. 240px) e mais alto. */}
         <textarea
           ref={inputRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onBlur={saveText}
           onKeyDown={handleKeyDown}
-          rows={Math.max(1, (text.match(/\n/g) || []).length + 1)}
-          className="w-full p-1 bg-white/95 text-zinc-900 border-2 border-blue-500 rounded-md text-center text-xs font-semibold outline-none shadow-lg resize-none min-h-[30px]"
-          style={mergedStyle}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          rows={3}
+          className="nodrag nopan nowheel relative left-1/2 -translate-x-1/2 block px-2.5 py-2 bg-white text-zinc-900 border-2 border-blue-500 rounded-lg text-center font-semibold outline-none shadow-xl resize-none overflow-hidden cursor-text select-text"
+          style={{ ...mergedStyle, width: 'max(100%, 240px)', minHeight: 64, fontSize: 14, lineHeight: '1.4' }}
           autoFocus
         />
         <button

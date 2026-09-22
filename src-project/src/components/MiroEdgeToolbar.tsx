@@ -18,7 +18,8 @@ import {
   ArrowUpToLine,
   ArrowDownToLine,
   Lock,
-  Unlock
+  Unlock,
+  Type
 } from 'lucide-react';
 
 interface MiroEdgeToolbarProps {
@@ -219,6 +220,30 @@ export const MiroEdgeToolbar: React.FC<MiroEdgeToolbarProps> = ({
         data: { ...(activeEdge.data || {}), controlPoints: undefined, manualRouting: true }
       });
     }
+  };
+
+  // Posição do texto na linha (ver AdjustableEdge): automático segue a linha
+  // num ponto 0..1 (labelT); manual fica fixo em labelPos.
+  const labelMode: 'auto' | 'manual' = (activeEdge.data as any)?.labelMode === 'manual' ? 'manual' : 'auto';
+  const rawLabelT = (activeEdge.data as any)?.labelT;
+  const labelPercent = Math.round((typeof rawLabelT === 'number' ? rawLabelT : 0.5) * 100);
+  const setLabelMode = (mode: 'auto' | 'manual') => {
+    if (mode === labelMode) return;
+    const nextData: any = { ...(activeEdge.data || {}), labelMode: mode };
+    // Nos dois sentidos a posição fixa antiga é descartada: indo para o
+    // manual, a própria linha (AdjustableEdge) congela o texto onde ele está
+    // agora; voltando ao automático, ele volta a seguir a linha.
+    delete nextData.labelPos;
+    applyEdgeUpdate({ data: nextData });
+  };
+  const setLabelT = (t: number) => {
+    applyEdgeUpdate({ data: { ...(activeEdge.data || {}), labelMode: 'auto', labelT: Math.min(1, Math.max(0, t)) } });
+  };
+  const resetLabelPosition = () => {
+    const nextData: any = { ...(activeEdge.data || {}), labelMode: 'auto' };
+    delete nextData.labelPos;
+    delete nextData.labelT;
+    applyEdgeUpdate({ data: nextData });
   };
 
   const isAutoRouting = !(activeEdge.data?.manualRouting ?? false);
@@ -519,6 +544,90 @@ export const MiroEdgeToolbar: React.FC<MiroEdgeToolbarProps> = ({
             </p>
           </div>
         )}
+
+        {/* SECTION: POSIÇÃO DO TEXTO NA LINHA */}
+        {!isMultiple && activeEdge.label ? (
+          <div className="space-y-2 pt-2 border-t border-zinc-100">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Type size={13} className="text-zinc-600" />
+                Posição do Texto
+              </label>
+              <span className="text-[10px] text-zinc-400 font-medium">
+                {labelMode === 'manual' ? 'Manual (fixo)' : 'Automático'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                onClick={() => setLabelMode('auto')}
+                className={`py-1.5 px-2 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
+                  labelMode === 'auto' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                }`}
+                title="O texto acompanha a linha quando as formas se movem"
+              >
+                Automático
+              </button>
+              <button
+                onClick={() => setLabelMode('manual')}
+                className={`py-1.5 px-2 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
+                  labelMode === 'manual' ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                }`}
+                title="O texto fica onde você posicionar, mesmo movendo as formas"
+              >
+                Manual
+              </button>
+            </div>
+            {labelMode === 'auto' ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-zinc-400 w-9">Início</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={labelPercent}
+                    onChange={(e) => setLabelT(Number(e.target.value) / 100)}
+                    className="flex-1 accent-blue-600 cursor-pointer"
+                    aria-label="Posição do texto ao longo da linha"
+                  />
+                  <span className="text-[10px] text-zinc-400 w-6 text-right">Fim</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { label: 'Início', t: 0.15 },
+                    { label: 'Meio', t: 0.5 },
+                    { label: 'Fim', t: 0.85 },
+                  ].map((opt) => (
+                    <button
+                      key={opt.label}
+                      onClick={() => setLabelT(opt.t)}
+                      className={`py-1 rounded-lg border text-[11px] font-medium cursor-pointer transition-all ${
+                        Math.abs(labelPercent / 100 - opt.t) < 0.01
+                          ? 'bg-blue-50 border-blue-400 text-blue-700'
+                          : 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <button
+                onClick={resetLabelPosition}
+                className="w-full py-1.5 rounded-xl border border-zinc-200 bg-white text-xs font-semibold text-zinc-600 hover:bg-zinc-50 cursor-pointer transition-all"
+              >
+                Voltar ao meio (automático)
+              </button>
+            )}
+            <p className="text-[10px] text-zinc-400 leading-snug px-0.5">
+              {labelMode === 'manual'
+                ? 'O texto fica onde você soltar e não muda ao mover as formas. Arraste o texto na linha selecionada para reposicionar.'
+                : 'O texto nasce no meio e acompanha a linha quando as formas se movem. Arraste o texto na linha selecionada (ou use a barra) para escolher o ponto.'}
+            </p>
+          </div>
+        ) : null}
 
         {/* SECTION 3: COLOR & STROKE WIDTH */}
         <div className="space-y-2 pt-2 border-t border-zinc-100">

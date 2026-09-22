@@ -124,7 +124,7 @@ export const FlowDataTable: React.FC<FlowDataTableProps> = ({
             onClick={onToggleTimingMode}
             className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1.5 transition-all ${
               showTimingMode
-                ? 'bg-amber-500 text-zinc-950 font-bold shadow-sm'
+                ? 'bg-amber-500 text-black font-bold shadow-sm'
                 : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
             }`}
             title="Ativar/Desativar exibição de tempos acumulados no fluxograma"

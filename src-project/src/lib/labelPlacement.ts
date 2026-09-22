@@ -209,3 +209,34 @@ export const placeEdgeLabel = ({
   // 3. Nada totalmente livre: fica onde sobrepõe menos
   return { x: best.x, y: best.y };
 };
+
+/** Inverso de pointAtFraction: projeta um ponto na linha e devolve a fração (0..1). */
+export const fractionOfPoint = (polyline: Point[], p: Point): number => {
+  if (!Array.isArray(polyline) || polyline.length < 2) return 0.5;
+  let total = 0;
+  const lens: number[] = [];
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const l = Math.hypot(polyline[i + 1].x - polyline[i].x, polyline[i + 1].y - polyline[i].y);
+    lens.push(l);
+    total += l;
+  }
+  if (total === 0) return 0.5;
+  let best = { dist: Infinity, along: 0 };
+  let acc = 0;
+  for (let i = 0; i < lens.length; i++) {
+    const a = polyline[i];
+    const b = polyline[i + 1];
+    const l = lens[i];
+    let f = 0;
+    if (l > 0) {
+      f = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / (l * l);
+      f = Math.min(1, Math.max(0, f));
+    }
+    const qx = a.x + (b.x - a.x) * f;
+    const qy = a.y + (b.y - a.y) * f;
+    const d = Math.hypot(p.x - qx, p.y - qy);
+    if (d < best.dist) best = { dist: d, along: acc + f * l };
+    acc += l;
+  }
+  return best.along / total;
+};

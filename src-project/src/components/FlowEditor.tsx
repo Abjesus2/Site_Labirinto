@@ -124,6 +124,8 @@ import { deleteSelectionSafely, getActualEdgeEndpoint, getPositionFromHandleId, 
 import { getObstacles, routeOrthogonalAuto, getManhattanNormal, validateRouteAgainstObstacles } from '../utils/orthogonalRouter';
 import { getShapeConnectionPoint } from '../utils/shapeGeometry';
 import { ensureConnectedGraph } from '../utils/graphSanitizer';
+import { computeAlignmentSnap, GuideLine, GuideRect } from '../utils/alignmentGuides';
+import { useTheme } from '../lib/useTheme';
 
 const customEdgeTypes = {
   adjustable: AdjustableEdge,
@@ -457,9 +459,65 @@ interface FlowEditorProps {
   onBack: () => void;
 }
 
+interface AlignmentGuidesState {
+  vertical: GuideLine | null;
+  horizontal: GuideLine | null;
+}
+
+const NO_ALIGNMENT_GUIDES: AlignmentGuidesState = { vertical: null, horizontal: null };
+
+/**
+ * Desenha as linhas-guia de alinhamento (em coordenadas de tela) enquanto
+ * uma forma é arrastada — calculadas em onNodesChange a partir das bordas e
+ * centros das outras formas (ver utils/alignmentGuides.ts).
+ */
+function AlignmentGuidesOverlay({ guides }: { guides: AlignmentGuidesState }) {
+  const [tx, ty, zoom] = useStore((s) => s.transform);
+  if (!guides.vertical && !guides.horizontal) return null;
+  const v = guides.vertical;
+  const h = guides.horizontal;
+  return (
+    <svg className="pointer-events-none absolute inset-0 w-full h-full" style={{ zIndex: 5 }}>
+      {v && (
+        <line
+          x1={v.pos * zoom + tx}
+          x2={v.pos * zoom + tx}
+          y1={v.from * zoom + ty}
+          y2={v.to * zoom + ty}
+          stroke="#ec4899"
+          strokeWidth={1.5}
+          strokeDasharray="5 4"
+        />
+      )}
+      {h && (
+        <line
+          x1={h.from * zoom + tx}
+          x2={h.to * zoom + tx}
+          y1={h.pos * zoom + ty}
+          y2={h.pos * zoom + ty}
+          stroke="#ec4899"
+          strokeWidth={1.5}
+          strokeDasharray="5 4"
+        />
+      )}
+    </svg>
+  );
+}
+
 function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const isConnecting = useStore((s) => s.connection.inProgress);
   const [nodes, setNodes] = useState<Node[]>([]);
+  // Cópia sempre atual dos nós para o cálculo das linhas-guia dentro de
+  // onNodesChange (que não depende de "nodes" para não ser recriado a cada
+  // pixel de arraste).
+  const nodesRef = useRef<Node[]>(nodes);
+  nodesRef.current = nodes;
+  const [alignGuides, setAlignGuides] = useState<AlignmentGuidesState>(NO_ALIGNMENT_GUIDES);
+  // Último encaixe aplicado no arraste: ao soltar, o React Flow manda uma
+  // posição final própria (a da grade, sem o encaixe) — reaplicamos o mesmo
+  // deslocamento para a forma não "pular" 1-2px para fora do alinhamento.
+  const lastAlignSnapRef = useRef<{ dx: number; dy: number; ids: Set<string> } | null>(null);
+  const themeState = useTheme();
   const [edges, setEdges] = useState<Edge[]>([]);
   const [title, setTitle] = useState("Carregando...");
   const [loading, setLoading] = useState(true);
@@ -475,6 +533,14 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // clique no botão da barra lateral e o clique no canvas que escolhe
   // onde a linha nasce.
   const [isPlacingFreeEdge, setIsPlacingFreeEdge] = useState(false);
+  // Forma escolhida na barra lateral esperando o clique no canvas para
+  // nascer exatamente ali (em vez de cair num ponto fixo da tela).
+  const [pendingShape, setPendingShape] = useState<{ type: string; data?: Record<string, any> } | null>(null);
+  const handleAddNodeRef = useRef<(type: string, data?: Record<string, any>, at?: { x: number; y: number }) => void>(() => {});
+  // Forma recém-posicionada por clique/soltar: o tamanho padrão usado para
+  // centralizar nem sempre é o tamanho real (o texto pode alargar a forma).
+  // Assim que o React Flow mede a forma, ela é recentralizada no ponto exato.
+  const recenterNewNodeRef = useRef<{ id: string; cx: number; cy: number } | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
   const [minimapSize, setMinimapSize] = useState<'sm' | 'md' | 'lg'>('sm');
@@ -774,6 +840,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     // usuário quer controle manual total aqui; o alinhamento garantido fica
     // só na geração por IA (buildSectorContainers), não como reação a
     // qualquer arraste.
+    setAlignGuides(NO_ALIGNMENT_GUIDES);
     pushHistory(nodes, edges, 'Moveu elemento');
     saveToCloud(activeVersion, nodes, edges);
   }, [nodes, edges, activeVersion, pushHistory, saveToCloud]);
@@ -1413,6 +1480,18 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       });
     };
 
+    // Clique no texto de uma linha seleciona essa linha (útil quando duas
+    // linhas se sobrepõem, como "Sim"/"Não" saindo do mesmo losango).
+    const handleSelectEdgeEvent = (e: any) => {
+      if (isNavigationMode) return;
+      const target = edges.find((eg) => eg.id === e.detail?.id);
+      if (!target) return;
+      setReconnectingEndpoint(null);
+      setNodes((nds) => nds.map((n) => (n.selected ? { ...n, selected: false } : n)));
+      setEdges((eds) => eds.map((eg) => ({ ...eg, selected: eg.id === target.id })));
+      setSelectedEdge(target);
+    };
+    window.addEventListener('flow-select-edge', handleSelectEdgeEvent);
     window.addEventListener('flow-update-node-label', handleUpdateLabel);
     window.addEventListener('flow-open-timing-modal', handleOpenTiming);
     window.addEventListener('flow-quick-add', handleMiroQuickAdd);
@@ -1447,6 +1526,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       window.removeEventListener('flow-delete-edge', handleDeleteEdgeEvent);
       window.removeEventListener('flow-reconnect-edge', handleReconnectEdgeEvent);
       window.removeEventListener('flow-update-edge-data', handleUpdateEdgeDataEvent);
+      window.removeEventListener('flow-select-edge', handleSelectEdgeEvent);
     };
   }, [nodes, edges, activeVersion, pushHistory, saveToCloud, isNavigationMode]);
 
@@ -1495,6 +1575,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         setShowExportMenu(false);
         setSelectedEdge(null);
         setIsPlacingFreeEdge(false);
+        setPendingShape(null);
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         const target = e.target as HTMLElement;
         if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) {
@@ -1568,6 +1649,63 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       }
       return;
     }
+
+    // Linhas-guia de alinhamento: enquanto arrasta, encaixa o conjunto
+    // arrastado na borda/centro da forma mais próxima (se estiver perto o
+    // bastante) e mostra a linha. Raias/quadros só se alinham entre si;
+    // formas só com formas.
+    const dragChanges = changes.filter(
+      (c) => c.type === 'position' && (c as any).dragging && (c as any).position,
+    ) as any[];
+    if (dragChanges.length > 0) {
+      const current = nodesRef.current;
+      const byId = new Map(current.map((n) => [n.id, n]));
+      const isContainer = (n: Node) => n.type === 'swimlane' || n.type === 'frame';
+      const rectOf = (n: Node, pos?: { x: number; y: number }): GuideRect => {
+        const dim = getNodeDimensions(n.type);
+        return {
+          x: (pos || n.position).x,
+          y: (pos || n.position).y,
+          width: (n.measured?.width as number) || (n.width as number) || (n.style?.width as number) || dim.width,
+          height: (n.measured?.height as number) || (n.height as number) || (n.style?.height as number) || dim.height,
+        };
+      };
+      const draggedIds = new Set(dragChanges.map((c) => c.id));
+      const draggedNodes = dragChanges.map((c) => byId.get(c.id)).filter(Boolean) as Node[];
+      const draggingContainer = draggedNodes.some(isContainer);
+      const draggedRects = dragChanges
+        .filter((c) => byId.has(c.id))
+        .map((c) => rectOf(byId.get(c.id)!, c.position));
+      const others = current
+        .filter((n) => !draggedIds.has(n.id) && !n.hidden && n.type !== 'junction' && isContainer(n) === draggingContainer)
+        .map((n) => rectOf(n));
+      const zoom = getViewport().zoom || 1;
+      // Limite em pixels de tela, mas nunca menor que ~meia grade (a grade
+      // de 10px empurra a forma em passos e, com zoom alto, 8px de tela
+      // viravam só 3 unidades — o encaixe nunca acontecia).
+      const snap = computeAlignmentSnap(draggedRects, others, Math.max(10 / zoom, 6));
+      if (snap.dx || snap.dy) {
+        changes = changes.map((c) =>
+          c.type === 'position' && (c as any).dragging && (c as any).position && draggedIds.has(c.id)
+            ? { ...c, position: { x: (c as any).position.x + snap.dx, y: (c as any).position.y + snap.dy } }
+            : c,
+        ) as NodeChange[];
+      }
+      lastAlignSnapRef.current = { dx: snap.dx, dy: snap.dy, ids: draggedIds };
+      setAlignGuides({ vertical: snap.vertical, horizontal: snap.horizontal });
+    } else if (changes.some((c) => c.type === 'position')) {
+      const last = lastAlignSnapRef.current;
+      if (last && (last.dx || last.dy)) {
+        changes = changes.map((c) =>
+          c.type === 'position' && !(c as any).dragging && (c as any).position && last.ids.has(c.id)
+            ? { ...c, position: { x: (c as any).position.x + last.dx, y: (c as any).position.y + last.dy } }
+            : c,
+        ) as NodeChange[];
+      }
+      lastAlignSnapRef.current = null;
+      setAlignGuides(NO_ALIGNMENT_GUIDES);
+    }
+
     setNodes((nds) => {
       const nextNodes = applyNodeChanges(changes, nds);
 
@@ -1585,7 +1723,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       saveToCloud(activeVersion, nextNodes, edges);
       return nextNodes;
     });
-  }, [edges, selectedEdge, performIndependentDelete, activeVersion, saveToCloud]);
+  }, [edges, selectedEdge, performIndependentDelete, activeVersion, saveToCloud, getViewport]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     const removals = changes.filter(c => c.type === 'remove') as { type: 'remove'; id: string }[];
@@ -1838,6 +1976,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, [nodes, edges, getViewport, activeVersion, pushHistory, saveToCloud]);
 
   const onPaneClick = useCallback((e: React.MouseEvent) => {
+    if (pendingShape) {
+      const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      handleAddNodeRef.current(pendingShape.type, pendingShape.data, pos);
+      setPendingShape(null);
+      return;
+    }
     if (isPlacingFreeEdge) {
       const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
       handleAddFreeEdge(pos);
@@ -1852,7 +1996,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setShowTimeSettingsMenu(false);
     setNodes((nds) => nds.map((n) => ({ ...n, selected: false })));
     setEdges((eds) => eds.map((e) => ({ ...e, selected: false })));
-  }, [isPlacingFreeEdge, screenToFlowPosition, handleAddFreeEdge]);
+  }, [pendingShape, isPlacingFreeEdge, screenToFlowPosition, handleAddFreeEdge]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -1877,68 +2021,15 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         if (rawData) extraData = JSON.parse(rawData);
       } catch (e) {}
 
-      const defaultLabels: Record<string, string> = {
-        process: 'Novo Processo',
-        start: 'Início',
-        end: 'Fim',
-        decision: 'Decisão?',
-        database: 'Banco de Dados',
-        document: 'Documento',
-        sticky: 'Anotação...',
-        subprocess: 'Subprocesso',
-        inputoutput: 'Entrada / Saída',
-        cloud: 'API / Serviço',
-        circle: 'Evento',
-        text: 'Texto...',
-        swimlane: 'Raia / Swimlane',
-        frame: 'Quadro'
-      };
-
-      const isContainer = type === 'swimlane' || type === 'frame';
-
-      const newNode: Node = {
-        id: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        type,
-        position,
-        // zIndex precisa ser propriedade de topo do nó — o React Flow só lê
-        // dali para decidir a ordem de empilhamento; um zIndex dentro de
-        // "style" é só CSS e não afeta isso. CONTAINER_BASE_Z_INDEX (-100)
-        // fica abaixo até das arestas padrão (-1), não só dos nós — ver
-        // comentário em sectorContainers.ts. Como zIndex negativo continua
-        // funcionando com "elevar nó selecionado" (+1000 por padrão), a raia
-        // some por trás sozinha ao ser deselecionada.
-        zIndex: isContainer ? CONTAINER_BASE_Z_INDEX : undefined,
-        style: isContainer
-          ? {
-              width: type === 'swimlane' ? 800 : 600,
-              height: type === 'swimlane' ? 200 : 400,
-            }
-          : undefined,
-        data: {
-          label: extraData.label || defaultLabels[type] || 'Elemento',
-          styleOverride: extraData.styleOverride || {},
-          timing: {
-            duration: type === 'start' || type === 'end' ? 0 : 10,
-            setupTime: 0,
-            waitTime: 0,
-            pauseTime: 0,
-            otherExtraTime: 0,
-            status: 'pending'
-          },
-          ...extraData
-        },
-        selected: true
-      };
-
-      const updatedNodes = nodes.map(n => ({ ...n, selected: false })).concat(newNode);
-      setNodes(updatedNodes);
-      pushHistory(updatedNodes, edges);
-      saveToCloud(activeVersion, updatedNodes, edges);
+      // Mesma criação do clique-para-posicionar: a forma nasce centralizada
+      // no ponto onde foi solta.
+      setPendingShape(null);
+      handleAddNodeRef.current(type, extraData, position);
     },
-    [screenToFlowPosition, nodes, edges, activeVersion, pushHistory, saveToCloud]
+    [screenToFlowPosition]
   );
 
-  const handleAddNode = (type: string, initialData?: Record<string, any>) => {
+  const handleAddNode = (type: string, initialData?: Record<string, any>, at?: { x: number; y: number }) => {
     let position = {
       x: 300 + (nodes.length % 5) * 40,
       y: 200 + (nodes.length % 5) * 40,
@@ -1985,8 +2076,22 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       }
     }
 
+    // Posição escolhida pelo usuário (clique no canvas ou soltar do
+    // arraste): a forma nasce centralizada no ponto; raia/quadro nasce com
+    // o canto superior esquerdo no ponto (mantendo a largura das irmãs).
+    const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    if (at) {
+      if (isContainer) {
+        position = { x: at.x, y: at.y };
+      } else {
+        const dim = getNodeDimensions(type);
+        position = { x: at.x - dim.width / 2, y: at.y - dim.height / 2 };
+        recenterNewNodeRef.current = { id: newNodeId, cx: at.x, cy: at.y };
+      }
+    }
+
     const newNode: Node = {
-      id: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: newNodeId,
       type,
       position,
       // Ver comentário equivalente no onDrop acima: zIndex tem de ser
@@ -2015,6 +2120,30 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     pushHistory(updatedNodes, edges);
     saveToCloud(activeVersion, updatedNodes, edges);
   };
+  handleAddNodeRef.current = handleAddNode;
+
+  useEffect(() => {
+    const pending = recenterNewNodeRef.current;
+    if (!pending) return;
+    const n = nodes.find((x) => x.id === pending.id);
+    if (!n) return;
+    const w = n.measured?.width as number | undefined;
+    const h = n.measured?.height as number | undefined;
+    if (!w || !h) return;
+    recenterNewNodeRef.current = null;
+    const x = pending.cx - w / 2;
+    const y = pending.cy - h / 2;
+    if (Math.abs(x - n.position.x) < 0.5 && Math.abs(y - n.position.y) < 0.5) return;
+    const next = nodes.map((node) => (node.id === n.id ? { ...node, position: { x, y } } : node));
+    setNodes(next);
+    saveToCloud(activeVersion, next, edges);
+  }, [nodes, edges, activeVersion, saveToCloud]);
+
+  // Botão de forma na barra lateral: entra no modo "clique para posicionar".
+  const requestPlaceNode = useCallback((type: string, data?: Record<string, any>) => {
+    setIsPlacingFreeEdge(false);
+    setPendingShape({ type, data });
+  }, []);
 
   // Node Property Updaters
   const updateNodeLabel = (id: string, label: string) => {
@@ -3798,8 +3927,8 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
           <MiroToolbar
             toolMode={toolMode}
             setToolMode={setToolMode}
-            onAddNode={handleAddNode}
-            onAddFreeEdge={() => setIsPlacingFreeEdge(true)}
+            onAddNode={requestPlaceNode}
+            onAddFreeEdge={() => { setPendingShape(null); setIsPlacingFreeEdge(true); }}
             isPlacingFreeEdge={isPlacingFreeEdge}
             onOpenTemplates={() => setShowTemplatesModal(true)}
             onOpenAI={() => setShowAIModal(true)}
@@ -3819,6 +3948,20 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               className="ml-1 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer"
             >
               Sair
+            </button>
+          </div>
+        )}
+
+        {/* Modo de posicionar forma nova — aviso no topo até o clique no canvas */}
+        {pendingShape && !isNavigationMode && (
+          <div className="absolute left-1/2 -translate-x-1/2 top-3 z-40 flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-2xl shadow-xl text-xs font-bold animate-in fade-in slide-in-from-top-2 duration-150">
+            <Plus size={14} />
+            <span>Clique na tela onde a forma deve ficar</span>
+            <button
+              onClick={() => setPendingShape(null)}
+              className="ml-1 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer"
+            >
+              Cancelar (Esc)
             </button>
           </div>
         )}
@@ -4079,15 +4222,12 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             onDragOver={isNavigationMode ? undefined : onDragOver}
             panOnDrag={isNavigationMode || toolMode === 'pan'}
             selectionOnDrag={!isNavigationMode && toolMode === 'select'}
-            // Desliga o auto-scroll durante a seleção por arraste: perto da
-            // borda do canvas ele rola o conteúdo por baixo do mouse
-            // enquanto a caixa de seleção ainda está aberta, varrendo (e
-            // selecionando) formas/linhas que passaram a ficar dentro da
-            // caixa só por causa da rolagem — nunca porque o mouse de fato
-            // passou por cima delas. Sem isso, "selecionei uma coisa e veio
-            // outra junto que eu nem toquei" quando o arraste começa perto
-            // do limite da tela.
-            autoPanOnSelection={false}
+            // Seleção por arraste rola a tela sozinha quando o mouse chega
+            // perto de qualquer borda do canvas, para continuar selecionando
+            // além do que cabe na tela (pedido do usuário). A caixa fica
+            // ancorada no ponto onde o arraste começou, então o que entra
+            // nela é exatamente o que fica entre esse ponto e o mouse.
+            autoPanOnSelection={true}
             multiSelectionKeyCode={['Control', 'Meta', 'Shift']}
             connectionMode={ConnectionMode.Loose}
             snapToGrid={true}
@@ -4113,11 +4253,18 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               markerEnd: { type: MarkerType.ArrowClosed, color: '#0f172a' },
               style: { stroke: '#0f172a', strokeWidth: 2 }
             }}
-            className={`bg-zinc-50 ${isConnecting ? "is-connecting" : ""} ${isNavigationMode ? "cursor-default" : ""} ${hasSelectedEdge ? "edge-selected-mode" : ""}`}
-            style={isPlacingFreeEdge ? { cursor: FREE_EDGE_CURSOR } : undefined}
+            className={`bg-zinc-50 ${isConnecting ? "is-connecting" : ""} ${isNavigationMode ? "cursor-default" : ""} ${hasSelectedEdge ? "edge-selected-mode" : ""} ${pendingShape ? "placing-shape" : ""}`}
+            style={isPlacingFreeEdge ? { cursor: FREE_EDGE_CURSOR } : pendingShape ? { cursor: 'crosshair' } : undefined}
           >
             {/* Dot Grid */}
-            <Background color="#cbd5e1" gap={20} size={1.5} />
+            {/* Pontilhado mais forte no modo claro (quase sumia em cinza-claro
+                sobre fundo quase branco); no escuro continua como estava. */}
+            <Background
+              color={themeState.mode === 'dark' ? '#cbd5e1' : '#94a3b8'}
+              gap={20}
+              size={themeState.mode === 'dark' ? 1.5 : 1.8}
+            />
+            <AlignmentGuidesOverlay guides={alignGuides} />
 
             {/* Minimap Dock (Bottom Right with live viewport tracker and resizing) */}
             {showMinimap ? (

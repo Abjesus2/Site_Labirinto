@@ -168,6 +168,8 @@ export const MiroToolbar: React.FC<MiroToolbarProps> = ({
                 onAddNode('text', { label: 'Novo Texto' });
                 setActiveFlyout(null);
               }}
+              draggable
+              onDragStart={(e) => onDragStart(e, 'text', { label: 'Novo Texto' })}
               className="p-2.5 rounded-xl text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-all cursor-pointer"
               title="Inserir Texto (T)"
             >
@@ -269,7 +271,9 @@ export const MiroToolbar: React.FC<MiroToolbarProps> = ({
             </button>
           </div>
 
-          <div className="space-y-4">
+          {/* keep-colors: as amostras das formas mostram a cor real da forma —
+              o modo escuro não pode recolori-las (ver index.css). */}
+          <div className="space-y-4 keep-colors">
             {/* Básicos */}
             <div>
               <div className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider mb-2">Essenciais</div>
@@ -524,6 +528,8 @@ export const MiroToolbar: React.FC<MiroToolbarProps> = ({
                 onAddNode('swimlane', { label: '👤 Raia do Setor / Papel', width: 900, height: 200 });
                 setActiveFlyout(null);
               }}
+              draggable
+              onDragStart={(e) => onDragStart(e, 'swimlane', { label: '👤 Raia do Setor / Papel', width: 900, height: 200 })}
               className="w-full p-2.5 rounded-xl border border-zinc-200 hover:border-blue-400 hover:bg-blue-50/40 text-left text-xs font-medium text-zinc-800 flex items-center gap-2.5 transition-colors cursor-pointer"
             >
               <Columns size={16} className="text-blue-600 shrink-0" />
@@ -538,6 +544,8 @@ export const MiroToolbar: React.FC<MiroToolbarProps> = ({
                 onAddNode('frame', { label: 'Quadro / Seção', width: 700, height: 450 });
                 setActiveFlyout(null);
               }}
+              draggable
+              onDragStart={(e) => onDragStart(e, 'frame', { label: 'Quadro / Seção', width: 700, height: 450 })}
               className="w-full p-2.5 rounded-xl border border-zinc-200 hover:border-purple-400 hover:bg-purple-50/40 text-left text-xs font-medium text-zinc-800 flex items-center gap-2.5 transition-colors cursor-pointer"
             >
               <Layers size={16} className="text-purple-600 shrink-0" />

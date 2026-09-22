@@ -1,4 +1,4 @@
-import { collectLabelObstacles, placeEdgeLabel, pointAtFraction } from '../.tmp-labelPlacement.mjs';
+import { collectLabelObstacles, placeEdgeLabel, pointAtFraction, fractionOfPoint } from '../.tmp-labelPlacement.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -58,5 +58,15 @@ check('linha curta: etiqueta se afasta para o lado', !bate(curta, coladas), `(${
 // utilitarios
 check('ponto no meio da polilinha', (() => { const p = pointAtFraction([{ x: 0, y: 0 }, { x: 100, y: 0 }], 0.5); return p.x === 50 && p.y === 0; })());
 check('sem obstaculos nada muda', (() => { const p = placeEdgeLabel({ polyline: reta, x: 7, y: 9, width: 70, height: 20, obstacles: [] }); return p.x === 7 && p.y === 9; })());
+
+// Posição do texto escolhida arrastando: projeta o ponto na linha
+{
+  const emL = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }]; // linha em L, 200 de comprimento
+  check('meio de uma linha em L é o canto (50%), não o meio do 1º trecho', (() => { const p = pointAtFraction(emL, 0.5); return p.x === 100 && p.y === 0; })());
+  check('ponto sobre a linha vira a fração certa', Math.abs(fractionOfPoint(emL, { x: 100, y: 50 }) - 0.75) < 1e-9);
+  check('ponto fora da linha é projetado no trecho mais próximo', Math.abs(fractionOfPoint(emL, { x: 40, y: 30 }) - 0.2) < 1e-9);
+  check('ida e volta: fração -> ponto -> fração', Math.abs(fractionOfPoint(emL, pointAtFraction(emL, 0.37)) - 0.37) < 1e-9);
+  check('antes do início fica em 0, depois do fim fica em 1', fractionOfPoint(emL, { x: -50, y: 0 }) === 0 && fractionOfPoint(emL, { x: 100, y: 180 }) === 1);
+}
 
 console.log(R.join('\n'));

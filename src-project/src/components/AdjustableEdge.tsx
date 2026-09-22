@@ -17,7 +17,7 @@ import {
   Check
 } from 'lucide-react';
 import { getNodeDimensions } from './CustomNodes';
-import { collectLabelObstacles, placeEdgeLabel } from '../lib/labelPlacement';
+import { collectLabelObstacles, placeEdgeLabel, pointAtFraction, fractionOfPoint } from '../lib/labelPlacement';
 import { showToast } from '../lib/embedCompat';
 import { useNavigationMode } from '../lib/navigationMode';
 import {
@@ -54,6 +54,12 @@ export interface AdjustableEdgeData {
   label?: string;
   needsEvaluation?: boolean;
   isDubious?: boolean;
+  /** 'auto' (padrão): o texto acompanha a linha; 'manual': fica fixo em labelPos. */
+  labelMode?: 'auto' | 'manual';
+  /** Automático: ponto da linha onde o texto fica (0 = início, 0,5 = meio, 1 = fim). */
+  labelT?: number;
+  /** Manual: posição fixa do texto no fluxo (não muda ao mover as formas). */
+  labelPos?: EdgePoint;
   [key: string]: any;
 }
 
@@ -110,6 +116,9 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   const borderRadius = type === 'step' ? 0 : edgeData.borderRadius !== undefined ? edgeData.borderRadius : 16;
 
   const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [labelDragPos, setLabelDragPos] = useState<EdgePoint | null>(null);
+  const labelPolylineRef = useRef<EdgePoint[]>([]);
+  const labelPosRef = useRef<EdgePoint>({ x: 0, y: 0 });
   const [labelText, setLabelText] = useState((label as string) || edgeData.label || '');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -258,6 +267,43 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
     }
   }
 
+  // Posição do texto na linha:
+  // - automático sem escolha do usuário: meio do comprimento da linha, e
+  //   desliza para um trecho livre se o meio cair sobre forma/selo de tempo;
+  // - automático com ponto escolhido (labelT, ao arrastar o texto): fica
+  //   nesse ponto da linha e acompanha a linha quando as formas se movem;
+  // - manual (labelPos): fica exatamente onde o usuário soltou, mesmo que as
+  //   formas se movam.
+  const labelPolyline: EdgePoint[] =
+    type === 'straight' || type === 'default' || !points || points.length < 2
+      ? [{ x: currentSourceX, y: currentSourceY }, { x: currentTargetX, y: currentTargetY }]
+      : points;
+  labelPolylineRef.current = labelPolyline;
+  const labelMode: 'auto' | 'manual' = edgeData.labelMode === 'manual' ? 'manual' : 'auto';
+  const hasManualPos = labelMode === 'manual' && !!edgeData.labelPos && Number.isFinite(edgeData.labelPos.x);
+  // Sem posição fixa ainda (manual recém-ligado), o ponto escolhido na linha
+  // continua valendo — assim o texto é congelado exatamente onde estava.
+  const hasChosenT = !hasManualPos && typeof edgeData.labelT === 'number' && Number.isFinite(edgeData.labelT);
+  if (!draggingRoute && type !== 'default') {
+    const mid = pointAtFraction(labelPolyline, 0.5);
+    if (mid) {
+      labelX = mid.x;
+      labelY = mid.y;
+    }
+  }
+  if (hasChosenT) {
+    const p = pointAtFraction(labelPolyline, edgeData.labelT as number);
+    if (p) {
+      labelX = p.x;
+      labelY = p.y;
+    }
+  }
+  if (hasManualPos) {
+    labelX = (edgeData.labelPos as EdgePoint).x;
+    labelY = (edgeData.labelPos as EdgePoint).y;
+  }
+  const isUserPlacedLabel = hasManualPos || hasChosenT;
+
   // A etiqueta desliza pela própria linha até um trecho livre, para não cobrir
   // nem as formas nem os selos de tempo.
   const labelTextValue = String(labelText || '');
@@ -266,7 +312,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
     () => collectLabelObstacles(liveNodes as any[], getNodeDimensions),
     [liveNodes],
   );
-  if (labelTextValue && !isEditingLabel) {
+  if (labelTextValue && !isEditingLabel && !isUserPlacedLabel && !labelDragPos) {
     const routeForLabel =
       points && points.length >= 2
         ? points
@@ -286,6 +332,71 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
     labelX = placed.x;
     labelY = placed.y;
   }
+
+  if (labelDragPos) {
+    labelX = labelDragPos.x;
+    labelY = labelDragPos.y;
+  }
+  labelPosRef.current = { x: labelX, y: labelY };
+
+  // Modo manual recém-ativado (pela barra lateral) sem posição salva: congela
+  // o texto onde ele está agora, para não mudar mais ao mover as formas.
+  useEffect(() => {
+    if (labelMode === 'manual' && !hasManualPos && labelTextValue) {
+      window.dispatchEvent(
+        new CustomEvent('flow-update-edge-data', {
+          detail: { id, data: { labelPos: { ...labelPosRef.current } } },
+        }),
+      );
+    }
+  }, [labelMode, hasManualPos, labelTextValue, id]);
+
+  // Arrastar o texto (com a linha selecionada): no automático escolhe o ponto
+  // da linha; no manual posiciona livremente.
+  const onLabelPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isNavigationMode || e.button !== 0) return;
+    e.stopPropagation();
+    if (!selected) {
+      window.dispatchEvent(new CustomEvent('flow-select-edge', { detail: { id } }));
+    }
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const el = e.currentTarget;
+    try { el.setPointerCapture(e.pointerId); } catch {}
+    let moved = false;
+    let last: EdgePoint | null = null;
+    let lastT: number | null = null;
+    const onMove = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+      moved = true;
+      const flow = screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+      if (labelMode === 'manual') {
+        last = flow;
+      } else {
+        lastT = fractionOfPoint(labelPolylineRef.current, flow);
+        last = pointAtFraction(labelPolylineRef.current, lastT) || flow;
+      }
+      setLabelDragPos(last);
+    };
+    const onUp = () => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
+      setLabelDragPos(null);
+      if (!moved || !last) return;
+      window.dispatchEvent(
+        new CustomEvent('flow-update-edge-data', {
+          detail: {
+            id,
+            data: labelMode === 'manual' ? { labelPos: last } : { labelT: lastT },
+          },
+        }),
+      );
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+  };
 
   // Calculate segment controls for all orthogonal step paths
   const segmentControls: Array<{
@@ -730,9 +841,10 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
             style={{
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-              pointerEvents: 'all'
+              pointerEvents: 'all',
+              zIndex: 2100,
             }}
-            className="nodrag nopan z-50 flex items-center bg-white shadow-md rounded-lg border border-blue-500 p-0.5"
+            className="nodrag nopan flex items-center bg-white shadow-md rounded-lg border border-blue-500 p-0.5"
             onClick={(e) => e.stopPropagation()}
           >
             <input
@@ -766,17 +878,28 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
                 style={{
                   position: 'absolute',
                   transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-                  pointerEvents: 'all'
+                  pointerEvents: 'all',
+                  // A linha selecionada sobe para a frente (elevateEdgesOnSelect,
+                  // z ~1000). Os textos ficam sempre acima de qualquer linha,
+                  // senão o clique para arrastar/editar o texto caía na linha
+                  // selecionada que passa por baixo (ex.: "Sim" e "Não" saindo
+                  // sobrepostos do mesmo losango).
+                  zIndex: selected ? 2000 : 1500,
                 }}
-                className={`nodrag nopan z-30 select-none px-2 py-0.5 rounded text-[11px] font-medium text-zinc-800 bg-white/95 border border-zinc-200/90 shadow-2xs cursor-text transition-all ${
+                className={`nodrag nopan select-none px-2 py-0.5 rounded text-[11px] font-medium text-zinc-800 bg-white/95 border border-zinc-200/90 shadow-2xs ${!isNavigationMode ? 'cursor-move' : ''} ${labelDragPos ? '' : 'transition-all'} ${
                   selected ? 'ring-1 ring-blue-400 bg-blue-50/50' : 'hover:bg-white'
                 }`}
+                onPointerDown={onLabelPointerDown}
                 onDoubleClick={(e) => {
                   if (isNavigationMode) return;
                   e.stopPropagation();
                   setIsEditingLabel(true);
                 }}
-                title={isNavigationMode ? undefined : 'Clique duplo para editar o texto diretamente na linha'}
+                title={
+                  isNavigationMode
+                    ? undefined
+                    : 'Arraste para mudar a posição do texto na linha · clique duplo para editar'
+                }
               >
                 {labelText}
               </div>

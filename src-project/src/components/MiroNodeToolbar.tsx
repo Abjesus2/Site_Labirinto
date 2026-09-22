@@ -815,7 +815,7 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
           <div className="pt-2 border-t border-zinc-100">
             <button
               onClick={() => onOpenTimingModal(activeNode.id)}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-xs transition-all cursor-pointer"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold shadow-xs transition-all cursor-pointer"
             >
               <Clock size={16} />
               <span>Configurar Tempos da Etapa</span>
