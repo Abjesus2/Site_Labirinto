@@ -1368,8 +1368,13 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
             else nextData.targetAnchor = targetAnchor;
           }
           if (nextSource !== undefined || nextTarget !== undefined || nextSourceHandle !== undefined || nextTargetHandle !== undefined) {
+            // Descarta waypoints antigos (não fazem mais sentido pra nova ligação),
+            // mas marca a rota como manual — sem isso, mover a forma ligada
+            // reatribuía sozinho o lado/ponto de conexão que a pessoa acabou de
+            // escolher a dedo. Fica fixo até a pessoa religar "Ajuste Automático"
+            // no painel da linha (ver seção correspondente em MiroEdgeToolbar).
             delete nextData.controlPoints;
-            nextData.manualRouting = false;
+            nextData.manualRouting = true;
           }
           return {
             ...edge,
@@ -4030,7 +4035,12 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             
             isValidConnection={() => true}
             onEdgeClick={onEdgeClick}
-            elevateEdgesOnSelect={false}
+            // A linha selecionada precisa vir pra frente das outras — sem isso,
+            // quando duas ou mais linhas se encontram no mesmo ponto (setas
+            // convergindo numa mesma forma), a alça de arrastar a ponta da
+            // linha selecionada ficava atrás da(s) outra(s), impossível de
+            // agarrar mesmo com a linha certa já selecionada.
+            elevateEdgesOnSelect={true}
             elevateNodesOnSelect={true}
             onNodeClick={onNodeClick}
             onNodeDragStop={onNodeDragStop}

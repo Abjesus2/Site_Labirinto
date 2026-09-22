@@ -16,7 +16,9 @@ import {
   CheckCircle2,
   Layers,
   ArrowUpToLine,
-  ArrowDownToLine
+  ArrowDownToLine,
+  Lock,
+  Unlock
 } from 'lucide-react';
 
 interface MiroEdgeToolbarProps {
@@ -197,18 +199,33 @@ export const MiroEdgeToolbar: React.FC<MiroEdgeToolbarProps> = ({
     }
   };
 
+  // Trocar a forma ou o lado/ponto de conexão por aqui é a mesma ideia de
+  // arrastar a bolinha da linha até outro lugar — fixa a rota como manual
+  // (ver comentário equivalente em handleReconnectEdgeEvent no FlowEditor),
+  // senão mover a forma ligada desfazia essa escolha sozinho.
   const handleChangeNode = (endpoint: 'source' | 'target', nodeId: string) => {
     if (!isMultiple) {
-      onUpdateEdge(activeEdge.id, { [endpoint]: nodeId });
+      onUpdateEdge(activeEdge.id, {
+        [endpoint]: nodeId,
+        data: { ...(activeEdge.data || {}), controlPoints: undefined, manualRouting: true }
+      });
     }
   };
 
   const handleChangeHandle = (endpoint: 'source' | 'target', handleId: string) => {
     if (!isMultiple) {
       onUpdateEdge(activeEdge.id, {
-        [endpoint === 'source' ? 'sourceHandle' : 'targetHandle']: handleId
+        [endpoint === 'source' ? 'sourceHandle' : 'targetHandle']: handleId,
+        data: { ...(activeEdge.data || {}), controlPoints: undefined, manualRouting: true }
       });
     }
+  };
+
+  const isAutoRouting = !(activeEdge.data?.manualRouting ?? false);
+  const toggleAutoRouting = () => {
+    applyEdgeUpdate({
+      data: { ...(activeEdge.data || {}), manualRouting: isAutoRouting }
+    });
   };
 
   const toggleEvaluationStatus = () => {
@@ -465,6 +482,43 @@ export const MiroEdgeToolbar: React.FC<MiroEdgeToolbarProps> = ({
             </button>
           )}
         </div>
+
+        {/* SECTION: AJUSTE AUTOMÁTICO DO PONTO DE CONEXÃO */}
+        {!isMultiple && (
+          <div className="space-y-2 pt-2 border-t border-zinc-100">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
+                {isAutoRouting ? <Unlock size={13} className="text-zinc-600" /> : <Lock size={13} className="text-zinc-600" />}
+                Ponto de Conexão
+              </label>
+              <span className="text-[10px] text-zinc-400 font-medium">
+                {isAutoRouting ? 'Automático' : 'Fixo (manual)'}
+              </span>
+            </div>
+
+            <button
+              onClick={toggleAutoRouting}
+              className={`w-full py-2 px-2.5 text-center flex items-center justify-center gap-1.5 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
+                isAutoRouting
+                  ? 'bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50'
+                  : 'bg-emerald-50 border-emerald-400 text-emerald-700 shadow-2xs font-bold'
+              }`}
+              title={
+                isAutoRouting
+                  ? 'O ponto de conexão está livre: se você arrastar a bolinha da linha pra outro lado da forma, ele fica fixo automaticamente'
+                  : 'Voltar a recalcular o lado/ponto de conexão sozinho sempre que a forma ligada for movida'
+              }
+            >
+              {isAutoRouting ? <Unlock size={14} className="text-zinc-400" /> : <Lock size={14} className="text-emerald-600" />}
+              {isAutoRouting ? 'Ligar Ajuste Automático' : 'Ajuste Automático Desligado'}
+            </button>
+            <p className="text-[10px] text-zinc-400 leading-snug px-0.5">
+              {isAutoRouting
+                ? 'Ao arrastar a bolinha da linha para outro lado da forma, o ponto escolhido fica fixo — não muda mais sozinho quando a forma se move.'
+                : 'O ponto de conexão desta linha foi ajustado manualmente e não muda mais quando a forma ligada é movida. Clique acima para voltar ao ajuste automático.'}
+            </p>
+          </div>
+        )}
 
         {/* SECTION 3: COLOR & STROKE WIDTH */}
         <div className="space-y-2 pt-2 border-t border-zinc-100">

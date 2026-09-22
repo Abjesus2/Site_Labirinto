@@ -249,8 +249,11 @@ export default function App() {
   }
 
   
-  const hasLocalData = diagrams.length > 0 || folders.length > 0;
-  if (!activeDiagramId && !hasLocalData && !hasStarted) {
+  // Sempre mostra a tela de abertura ao abrir o site ou atualizar a página,
+  // mesmo que já existam fluxogramas salvos no navegador — só passa pra
+  // "Meus Diagramas" depois que a pessoa clicar em "Acessar o App" nesta
+  // sessão (hasStarted não é persistido, então volta a mostrar a cada reload).
+  if (!activeDiagramId && !hasStarted) {
     return (
       <LandingScreen onStart={() => setHasStarted(true)} />
     );
