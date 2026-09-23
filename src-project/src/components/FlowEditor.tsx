@@ -82,7 +82,11 @@ import {
   GitBranch,
   RotateCcw,
   PlusCircle,
-  Spline
+  Spline,
+  ChevronsUp,
+  ChevronsDown,
+  FolderOpen,
+  AlarmClock
 } from 'lucide-react';
 
 import { customNodeTypes, getNodeDimensions, pickBoxStyle } from './CustomNodes';
@@ -126,6 +130,9 @@ import { getShapeConnectionPoint } from '../utils/shapeGeometry';
 import { ensureConnectedGraph } from '../utils/graphSanitizer';
 import { computeAlignmentSnap, GuideLine, GuideRect } from '../utils/alignmentGuides';
 import { useTheme } from '../lib/useTheme';
+import { useBackupReminder } from '../lib/useBackupReminder';
+import { SaveStatusMenu } from './SaveStatusMenu';
+import { exportFullBackup } from '../lib/fullBackup';
 
 const customEdgeTypes = {
   adjustable: AdjustableEdge,
@@ -518,6 +525,16 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // deslocamento para a forma não "pular" 1-2px para fora do alinhamento.
   const lastAlignSnapRef = useRef<{ dx: number; dy: number; ids: Set<string> } | null>(null);
   const themeState = useTheme();
+  const backupReminder = useBackupReminder();
+  // Barra superior oculta para ganhar espaço de edição (lembrado neste navegador).
+  const HEADER_HIDDEN_KEY = 'labirinto_header_hidden_v1';
+  const [headerHidden, setHeaderHidden] = useState<boolean>(() => {
+    try { return localStorage.getItem(HEADER_HIDDEN_KEY) === '1'; } catch { return false; }
+  });
+  const toggleHeaderHidden = (hidden: boolean) => {
+    setHeaderHidden(hidden);
+    try { localStorage.setItem(HEADER_HIDDEN_KEY, hidden ? '1' : '0'); } catch {}
+  };
   const [edges, setEdges] = useState<Edge[]>([]);
   const [title, setTitle] = useState("Carregando...");
   const [loading, setLoading] = useState(true);
@@ -3357,6 +3374,27 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
+  // Backup completo (todos os diagramas/pastas deste navegador) a partir do
+  // botão "Salvo" — mesmo arquivo do "Backup Completo" da tela inicial, sem senha.
+  const downloadFullBackup = async () => {
+    try {
+      const content = await exportFullBackup();
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.setAttribute('download', `backup-labirinto-${new Date().toISOString().slice(0, 10)}.json`);
+      a.setAttribute('href', url);
+      a.click();
+      showToast({
+        message: 'Backup completo baixado. Ele também contém suas chaves de IA em texto puro — guarde em local seguro (para proteger com senha, use Opções → Backup Completo na tela inicial).',
+        tone: 'warn',
+        timeout: 14000,
+      });
+    } catch (e: any) {
+      showToast({ message: String(e?.message || e), tone: 'error', timeout: 12000 });
+    }
+  };
+
   const exportJson = () => {
     const jsonStr = JSON.stringify({ title, versions }, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -3395,8 +3433,9 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
     <NavigationModeContext.Provider value={isNavigationMode}>
     <div className="h-screen w-full flex flex-col bg-zinc-100 font-sans select-none overflow-hidden">
       {/* MIRO TOP NAVIGATION HEADER */}
+      {!headerHidden && (
       <header className="relative z-50 min-h-[52px] h-auto py-1.5 px-3 bg-white border-b border-zinc-200 flex flex-wrap items-center justify-between gap-2 shadow-xs flex-shrink-0">
-        <div className="flex items-center gap-2 min-w-0 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-nowrap">
           <button
             onClick={onBack}
             className="p-1.5 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl transition-colors shrink-0"
@@ -3409,17 +3448,17 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             type="text"
             value={title}
             onChange={updateTitle}
-            className="font-bold text-sm sm:text-base bg-transparent border-none hover:bg-zinc-100 focus:bg-white focus:ring-2 focus:ring-blue-500 rounded-lg px-2 py-1 text-zinc-800 transition-all outline-none truncate max-w-[160px] sm:max-w-[280px]"
+            className="font-bold text-sm sm:text-base bg-transparent border-none hover:bg-zinc-100 focus:bg-white focus:ring-2 focus:ring-blue-500 rounded-lg px-2 py-1 text-zinc-800 transition-all outline-none truncate min-w-0 w-[140px] sm:w-auto max-w-[140px] sm:max-w-[200px] 2xl:max-w-[280px]"
             placeholder="Nome do Fluxograma"
           />
 
-          <span className="px-2 py-0.5 text-[10px] font-extrabold tracking-wide bg-blue-50 text-blue-700 border border-blue-200/80 rounded-full select-none shrink-0 shadow-2xs">
+          <span className="hidden sm:inline px-2 py-0.5 text-[10px] font-extrabold tracking-wide bg-blue-50 text-blue-700 border border-blue-200/80 rounded-full select-none shrink-0 shadow-2xs">
             {APP_VERSION}
           </span>
 
           {/* Responsive Version Switcher */}
           <div className="flex items-center gap-1.5 ml-1 shrink-0">
-            <span className="hidden sm:inline text-[11px] font-semibold uppercase tracking-wider text-zinc-400">Versão:</span>
+            <span className="hidden 2xl:inline text-[11px] font-semibold uppercase tracking-wider text-zinc-400">Versão:</span>
             
             {/* Desktop / Tablet Pills */}
             <div className="hidden sm:flex items-center bg-zinc-100 p-0.5 rounded-lg border border-zinc-200/60 max-w-[340px] overflow-x-auto custom-scrollbar">
@@ -3457,47 +3496,6 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
 
         {/* Top Right Actions */}
         <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap sm:flex-nowrap">
-          {/* Real-time Save Status Indicator — abre o mesmo menu Exportar
-              (antes abria um modal "Guardar como..." à parte, com um
-              seletor de formato menor e incompleto que duplicava opções já
-              existentes no menu Exportar, com um destino "GitHub" que não
-              enviava nada de verdade, e um campo de renomear que já existe
-              no campo de título ao lado — tudo isso foi removido daqui). */}
-          <div className="relative shrink-0 flex items-center gap-1.5">
-            <button
-              onClick={() => setShowExportMenu(true)}
-              className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 border rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs ${
-                isSaving
-                  ? 'bg-zinc-50/90 border-zinc-200/90 text-zinc-500 hover:bg-zinc-100'
-                  : saveError
-                  ? 'bg-red-50/90 border-red-200/95 text-red-800 hover:bg-red-100'
-                  : 'bg-emerald-50/90 border-emerald-200/90 text-emerald-800 hover:bg-emerald-100'
-              }`}
-              title={
-                isSaving
-                  ? 'Salvando neste navegador...'
-                  : saveError
-                  ? 'Erro ao salvar neste navegador'
-                  : 'Salvo automaticamente neste navegador (sem nuvem) — clique para exportar/baixar'
-              }
-            >
-              <div className={`w-2 h-2 rounded-full shrink-0 ${
-                isSaving
-                  ? 'bg-zinc-400 animate-pulse'
-                  : saveError
-                  ? 'bg-red-600'
-                  : 'bg-emerald-500 animate-pulse'
-              }`} />
-
-              <span className="font-bold hidden xs:inline">
-                {isSaving ? 'Salvando...' : saveError ? 'Erro ao Salvar' : 'Salvo Neste Navegador'}
-              </span>
-              <span className="font-bold xs:hidden">
-                {isSaving ? 'Salvando' : saveError ? 'Erro' : 'Salvo'}
-              </span>
-              <ChevronDown size={12} className={isSaving ? 'text-zinc-500' : saveError ? 'text-red-700' : 'text-emerald-700'} />
-            </button>
-          </div>
           {/* Dubious / Red Connection Lines Counter Alert */}
           {dubiousEdges.length > 0 && (
             <button
@@ -3506,8 +3504,8 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               title="Clique para analisar e confirmar as conexões com alerta vermelho"
             >
               <AlertTriangle size={14} />
-              <span className="hidden sm:inline">{dubiousEdges.length} {dubiousEdges.length === 1 ? 'linha vermelha' : 'linhas vermelhas'}</span>
-              <span className="sm:hidden">{dubiousEdges.length}</span>
+              <span className="hidden 2xl:inline">{dubiousEdges.length} {dubiousEdges.length === 1 ? 'linha vermelha' : 'linhas vermelhas'}</span>
+              <span className="2xl:hidden">{dubiousEdges.length}</span>
             </button>
           )}
 
@@ -3524,7 +3522,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             <FileSpreadsheet size={15} className={isDataTableOpen ? 'text-white' : 'text-blue-600'} />
             <span className="hidden md:inline">Planilha</span>
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-900 text-white font-medium">
-              {summary.totalSteps} <span className="hidden sm:inline">etapas</span>
+              {summary.totalSteps} <span className="hidden 2xl:inline">etapas</span>
             </span>
           </button>
 
@@ -3544,7 +3542,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               title="Ativar/Desativar Exibição de Tempos Acumulados no Fluxograma"
             >
               <Clock size={13} className={showTimingMode ? 'text-amber-600' : 'text-zinc-400'} />
-              <span className="hidden lg:inline">Tempos:</span>
+              <span className="hidden 2xl:inline">Tempos:</span>
               <span className="font-bold">{showTimingMode ? 'ON' : 'OFF'}</span>
             </button>
             
@@ -3623,7 +3621,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                 title="Organizar Fluxograma Verticalmente com Linhas Retas (Dagre)"
               >
                 <AlignCenterVertical size={13} className="text-blue-600" />
-                <span className="hidden md:inline">Organizar ↓</span>
+                <span className="hidden 2xl:inline">Organizar ↓</span>
               </button>
               <button
                 onClick={() => applyAutoLayout('LR')}
@@ -3631,7 +3629,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                 title="Organizar Fluxograma Horizontalmente (Dagre)"
               >
                 <AlignCenterHorizontal size={13} className="text-blue-600" />
-                <span className="hidden md:inline">Organizar →</span>
+                <span className="hidden 2xl:inline">Organizar →</span>
               </button>
               <button
                 onClick={() => setShowAlignMenu(!showAlignMenu)}
@@ -3767,17 +3765,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             }`}
             title="Apresentar Fluxograma Passo a Passo"
           >
-            <Play size={14} /> <span className="hidden lg:inline">Apresentar</span>
-          </button>
-
-          {/* Import Button */}
-          <button
-            onClick={triggerImportFile}
-            className="px-2.5 sm:px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0"
-            title="Importar Arquivo de Fluxograma (.json, .drawio, .xml)"
-          >
-            <Upload size={14} />
-            <span className="hidden sm:inline">Importar</span>
+            <Play size={14} /> <span className="hidden 2xl:inline">Apresentar</span>
           </button>
 
           {/* Hidden File Input for Import */}
@@ -3789,31 +3777,38 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             className="hidden"
           />
 
-          {/* Compartilhamento (arquivo .json — sem nuvem) */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              onClick={() => setShowShareModal(true)}
-              className="px-2.5 sm:px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shadow-2xs"
-              title="Compartilhar o fluxograma (arquivo .json)"
-            >
-              <Users size={13} className="text-blue-600" />
-              <span className="hidden sm:inline">Compartilhar</span>
-            </button>
-          </div>
-
-          {/* Export Menu */}
+          {/* Arquivo: Importar, Compartilhar e Exportar agrupados num botão só */}
           <div className="relative shrink-0">
             <button
               onClick={() => setShowExportMenu(!showExportMenu)}
               className="px-2.5 sm:px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold rounded-xl transition-all flex items-center gap-1 sm:gap-1.5 shadow-sm"
+              title="Importar, compartilhar e exportar o fluxograma"
             >
-              <Download size={14} /> <span className="hidden sm:inline">Exportar</span> <ChevronDown size={12} />
+              <FolderOpen size={14} /> <span className="hidden sm:inline">Arquivo</span> <ChevronDown size={12} />
             </button>
             {showExportMenu && (
               <>
                 <div className="fixed inset-0 z-40 bg-transparent" onClick={() => setShowExportMenu(false)} />
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-zinc-200 rounded-2xl shadow-2xl overflow-hidden py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs">
-                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">Importação & Backup</div>
+                <div className="absolute right-0 top-full mt-2 w-64 max-h-[calc(100vh-90px)] overflow-y-auto custom-scrollbar bg-white border border-zinc-200 rounded-2xl shadow-2xl py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs">
+                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">Importar & Compartilhar</div>
+                  <button
+                    onClick={() => { triggerImportFile(); setShowExportMenu(false); }}
+                    className="w-full px-4 py-2 text-left font-semibold text-blue-700 bg-blue-50/70 hover:bg-blue-100/80 flex items-center justify-between"
+                    title="Importar Arquivo de Fluxograma (.json, .drawio, .xml)"
+                  >
+                    <span>Importar fluxograma</span>
+                    <Upload size={14} className="text-blue-600" />
+                  </button>
+                  <button
+                    onClick={() => { setShowShareModal(true); setShowExportMenu(false); }}
+                    className="w-full px-4 py-2 text-left font-medium text-zinc-700 hover:bg-zinc-50 flex items-center justify-between"
+                    title="Compartilhar o fluxograma (arquivo .json)"
+                  >
+                    <span>Compartilhar</span>
+                    <Users size={14} className="text-blue-600" />
+                  </button>
+                  <div className="my-1 h-px bg-zinc-100" />
+                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">Juntar Fluxos & Backup</div>
                   <button
                     onClick={() => { setShowImportFlowModal(true); setShowExportMenu(false); }}
                     className="w-full px-4 py-2 text-left font-semibold text-blue-700 bg-blue-50/70 hover:bg-blue-100/80 flex items-center justify-between"
@@ -3837,15 +3832,6 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                   >
                     <span>Colar fluxo copiado</span>
                     <ClipboardPaste size={14} className="text-zinc-500" />
-                  </button>
-                  <div className="my-1 h-px bg-zinc-100" />
-                  <button
-                    onClick={() => { triggerImportFile(); setShowExportMenu(false); }}
-                    className="w-full px-4 py-2 text-left font-semibold text-blue-700 bg-blue-50/70 hover:bg-blue-100/80 flex items-center justify-between"
-                    title="Importar um arquivo de fluxograma salvo anteriormente"
-                  >
-                    <span>Importar Fluxograma (.json)</span>
-                    <Upload size={14} className="text-blue-600" />
                   </button>
                   <button
                     onClick={() => { exportJson(); setShowExportMenu(false); }}
@@ -3917,8 +3903,46 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               </>
             )}
           </div>
+
+          {/* Status de salvamento + backup no PC e lembrete — no fim da barra */}
+          <SaveStatusMenu
+            isSaving={isSaving}
+            saveError={!!saveError}
+            reminder={backupReminder}
+            onDownloadFlow={exportJson}
+            onDownloadFull={downloadFullBackup}
+          />
+
+          {/* Ocultar a barra superior para ganhar espaço de edição */}
+          <button
+            onClick={() => toggleHeaderHidden(true)}
+            className="p-1.5 rounded-xl text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 border border-zinc-200 transition-colors shrink-0 cursor-pointer"
+            title="Ocultar a barra superior (mais espaço para editar)"
+            aria-label="Ocultar barra superior"
+          >
+            <ChevronsUp size={16} />
+          </button>
         </div>
       </header>
+      )}
+
+      {/* Barra superior oculta: botão pequeno para trazê-la de volta. Se o
+          lembrete de backup vencer com a barra oculta, este botão também pisca. */}
+      {headerHidden && (
+        <button
+          onClick={() => toggleHeaderHidden(false)}
+          className={`fixed top-2 right-2 z-[60] flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold shadow-lg cursor-pointer transition-colors ${
+            backupReminder.due
+              ? 'backup-due-blink border-amber-500 text-white'
+              : 'bg-white/95 border-zinc-200 text-zinc-600 hover:bg-zinc-100'
+          }`}
+          title={backupReminder.due ? 'Hora de fazer backup — mostrar a barra superior' : 'Mostrar a barra superior'}
+          aria-label="Mostrar barra superior"
+        >
+          {backupReminder.due ? <AlarmClock size={14} /> : <ChevronsDown size={14} />}
+          <span>{backupReminder.due ? 'Fazer Backup!' : 'Mostrar barra'}</span>
+        </button>
+      )}
 
       {/* MIRO CANVAS WORKSPACE */}
       <div className="flex-1 relative flex overflow-hidden" ref={reactFlowWrapper}>
@@ -3954,28 +3978,28 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
 
         {/* Modo de posicionar forma nova — aviso no topo até o clique no canvas */}
         {pendingShape && !isNavigationMode && (
-          <div className="absolute left-1/2 -translate-x-1/2 top-3 z-40 flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-2xl shadow-xl text-xs font-bold animate-in fade-in slide-in-from-top-2 duration-150">
-            <Plus size={14} />
-            <span>Clique na tela onde a forma deve ficar</span>
+          <div className="absolute top-3 z-40 left-[76px] right-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 flex items-center justify-between sm:justify-start gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-2xl shadow-xl text-xs font-bold animate-in fade-in slide-in-from-top-2 duration-150">
+            <Plus size={14} className="shrink-0" />
+            <span className="min-w-0">Clique na tela onde a forma deve ficar</span>
             <button
               onClick={() => setPendingShape(null)}
-              className="ml-1 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer"
+              className="ml-1 shrink-0 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer whitespace-nowrap"
             >
-              Cancelar (Esc)
+              Cancelar<span className="hidden sm:inline"> (Esc)</span>
             </button>
           </div>
         )}
 
         {/* Modo de posicionar a seta/linha independente — aviso no topo até o clique no canvas */}
         {isPlacingFreeEdge && !isNavigationMode && (
-          <div className="absolute left-1/2 -translate-x-1/2 top-3 z-40 flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-2xl shadow-xl text-xs font-bold animate-in fade-in slide-in-from-top-2 duration-150">
-            <Spline size={14} />
-            <span>Clique no canvas para posicionar a linha</span>
+          <div className="absolute top-3 z-40 left-[76px] right-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 flex items-center justify-between sm:justify-start gap-2 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-2xl shadow-xl text-xs font-bold animate-in fade-in slide-in-from-top-2 duration-150">
+            <Spline size={14} className="shrink-0" />
+            <span className="min-w-0">Clique no canvas para posicionar a linha</span>
             <button
               onClick={() => setIsPlacingFreeEdge(false)}
-              className="ml-1 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer"
+              className="ml-1 shrink-0 px-2 py-0.5 rounded-lg bg-white/20 hover:bg-white/30 transition-colors cursor-pointer whitespace-nowrap"
             >
-              Cancelar (Esc)
+              Cancelar<span className="hidden sm:inline"> (Esc)</span>
             </button>
           </div>
         )}
@@ -4268,7 +4292,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
 
             {/* Minimap Dock (Bottom Right with live viewport tracker and resizing) */}
             {showMinimap ? (
-              <Panel position="bottom-right" className="!m-4 !p-0 z-30">
+              <Panel position="bottom-right" className="!m-4 !mb-20 sm:!mb-4 !p-0 z-30">
                 <div className="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-zinc-200/90 p-2.5 select-none transition-all duration-200">
                   {/* Header with Title, Size Controls & Close */}
                   <div className="flex items-center justify-between pb-2 mb-1.5 border-b border-zinc-100 gap-2">
@@ -4352,7 +4376,9 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                 </div>
               </Panel>
             ) : (
-              <Panel position="bottom-right" className="!m-4 z-30">
+              // No celular fica escondido: a barra de zoom de baixo já tem o
+              // mesmo botão de minimapa, e este ficava por baixo dela.
+              <Panel position="bottom-right" className="!m-4 z-30 hidden sm:block">
                 <button
                   onClick={() => setShowMinimap(true)}
                   className="flex items-center gap-1.5 px-3 py-2 bg-white/95 hover:bg-blue-50 backdrop-blur-md border border-zinc-200 rounded-xl shadow-lg text-xs font-semibold text-zinc-700 hover:text-blue-600 transition-all hover:scale-105"

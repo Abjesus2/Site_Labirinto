@@ -1,6 +1,13 @@
 import { JSDOM, VirtualConsole } from 'jsdom';
 import fs from 'fs';
 
+// Vigia: se algo travar (um await que nunca resolve), o teste desiste em
+// 4 minutos, registra a falha e sai — nunca fica rodando indefinidamente.
+setTimeout(() => {
+  console.log('FALHA | teste do app travou e foi encerrado pelo vigia de tempo (4 min)');
+  process.exit(1);
+}, 240_000).unref();
+
 const EMBEDDED = process.argv.includes('--embedded');
 let html = fs.readFileSync(new URL('../dist/index.html', import.meta.url), 'utf-8');
 html = html.replace('<script type="module" crossorigin>', '<script>').replace('<script type="module">', '<script>');
@@ -186,7 +193,8 @@ if (simples) await click(simples, 900);
 const ativo = byText('button', /^(simples|normal|detalhado)$/i).find(p => /bg-white text-blue-700/.test(p.className));
 check('troca de versao funciona', !!ativo && /simples/i.test(ativo.textContent || ''), ativo?.textContent);
 
-const abrirMenuExport = async () => { const b = byText('button', /^Exportar$/i)[0]; if (b) await click(b, 500); };
+// Importar, Compartilhar e Exportar ficam agrupados no botão "Arquivo".
+const abrirMenuExport = async () => { const b = byText('button', /^Arquivo$/i)[0]; if (b) await click(b, 500); };
 
 // ---- copiar fluxo de outro arquivo e colar aqui
 const FLUXO = JSON.stringify({
@@ -335,7 +343,9 @@ const fallbacks = w.document.querySelectorAll('[data-labirinto-toasts] a[downloa
 check(EMBEDDED ? 'link alternativo de download no iframe' : 'sem link extra fora do iframe', EMBEDDED ? fallbacks === 3 : fallbacks === 0, String(fallbacks));
 
 // ---- compartilhar sem Google
+await abrirMenuExport();
 const compartilhar = byText('button', /^Compartilhar$/i)[0];
+check('menu Arquivo tem Importar, Compartilhar e Exportar', !!compartilhar && byText('button', /^Importar fluxograma$/i).length === 1 && byText('button', /Exportar Backup/i).length === 1);
 if (compartilhar) await click(compartilhar, 700);
 const shareTxt = w.document.body.textContent || '';
 check('compartilhamento sem nuvem/Google', /Sem conta e sem nuvem/.test(shareTxt) && !/Google Drive/i.test(shareTxt));
@@ -406,3 +416,9 @@ console.log((EMBEDDED ? '[MODO EMBUTIDO]' : '[MODO NORMAL]'));
 console.log(R.join('\n'));
 console.log('--- erros ---');
 console.log(errors.slice(0, 6).join('\n') || '(nenhum)');
+
+// Encerra explicitamente: o app tem relógios (ex.: lembrete de backup, de 15
+// em 15 s) que manteriam o Node vivo para sempre depois dos testes — a suíte
+// ficava "rodando" sem fim mesmo com todas as verificações já concluídas.
+try { w.close(); } catch {}
+process.exit(0);

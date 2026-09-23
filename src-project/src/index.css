@@ -246,6 +246,20 @@ body.is-dragging-edge-handle .react-flow__node .react-flow__handle,
   cursor: crosshair !important;
 }
 
+/* Lembrete de backup vencido: o botão "Salvo" alterna âmbar/vermelho até
+   ser clicado. Cores fixas (não mudam no modo escuro): é um alerta. */
+@keyframes backup-due-blink {
+  0%, 100% { background-color: #f59e0b; box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+  50% { background-color: #dc2626; box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+}
+.backup-due-blink {
+  animation: backup-due-blink 1s ease-in-out infinite;
+  color: #fff !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .backup-due-blink { animation: none; background-color: #dc2626; }
+}
+
 /* ===== Paleta de cor de destaque (marca/botões da tela inicial e do menu de
    opções) — troca só o "azul" da marca, nunca as cores das formas do
    fluxograma (que não usam essas variáveis). ===== */
@@ -430,7 +444,6 @@ html[data-theme="dark"] :is(.border-red-200, [class^="border-red-200/"], [class*
 html[data-theme="dark"] :is(.border-red-300, [class^="border-red-300/"], [class*=" border-red-300/"]):not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { border-color: color-mix(in srgb, #ef4444 55%, #18181b) !important; }
 html[data-theme="dark"] :is(.text-red-600, [class^="text-red-600/"], [class*=" text-red-600/"]):not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { color: #f87171 !important; }
 html[data-theme="dark"] :is(.hover\:text-red-600, [class^="hover:text-red-600/"], [class*=" hover:text-red-600/"]):hover:not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { color: #f87171 !important; }
-html[data-theme="dark"] :is(.text-red-700, [class^="text-red-700/"], [class*=" text-red-700/"]):not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { color: #fca5a5 !important; }
 html[data-theme="dark"] :is(.hover\:text-red-700, [class^="hover:text-red-700/"], [class*=" hover:text-red-700/"]):hover:not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { color: #fca5a5 !important; }
 html[data-theme="dark"] :is(.text-red-800, [class^="text-red-800/"], [class*=" text-red-800/"]):not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { color: #fecaca !important; }
 html[data-theme="dark"] :is(.text-red-900, [class^="text-red-900/"], [class*=" text-red-900/"]):not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { color: #fee2e2 !important; }
