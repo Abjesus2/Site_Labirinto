@@ -416,6 +416,15 @@ html[data-theme="dark"] { color-scheme: dark; }
 html[data-theme="dark"] .react-flow__attribution { background: rgba(24, 24, 27, 0.7) !important; }
 html[data-theme="dark"] .react-flow__attribution a { color: #a1a1aa !important; }
 
+/* Linhas no modo escuro: as linhas escuras ganham um contorno claro por baixo
+   (path.edge-dark-casing, desenhado pelo AdjustableEdge) e as pontas de seta
+   cheias ganham borda clara — visíveis tanto no fundo escuro do canvas quanto
+   sobre o cinza das raias/quadros. No modo claro o contorno não aparece. */
+.edge-dark-casing { display: none; }
+html[data-theme="dark"] .edge-dark-casing { display: inline; stroke: rgba(228, 228, 231, 0.9); }
+html[data-theme="dark"] .react-flow__arrowhead polyline.arrowclosed { stroke: #e4e4e7 !important; stroke-width: 1.5px !important; }
+html[data-theme="dark"] .react-flow__connection-path { stroke: #e4e4e7; }
+
 /* ===== Modo escuro — parte 2: estados (hover/focus/active) e cores claras de destaque.
    A parte 1 só invertia as classes "paradas" (bg-zinc-100, text-zinc-700...).
    Os estados de passar o mouse (hover:bg-zinc-100, hover:bg-blue-50...) e os

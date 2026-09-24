@@ -77,6 +77,23 @@ function parseSvgPathToPoints(svgPath: string): EdgePoint[] {
   return points;
 }
 
+/** Cor de linha escura (preto/azul-marinho/cinza-escuro) — precisa de contorno no modo escuro. */
+export const isDarkStrokeColor = (color: unknown): boolean => {
+  const c = String(color || '').trim().toLowerCase();
+  let r: number, g: number, b: number;
+  const hex = c.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/);
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].split('').map((x) => x + x).join('') : hex[1];
+    r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16);
+  } else {
+    const m = c.match(/^rgba?\(\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)/);
+    if (!m) return c === 'black';
+    r = +m[1]; g = +m[2]; b = +m[3];
+  }
+  const lin = (v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b) < 0.12;
+};
+
 /** Todos os trechos precisam ser horizontais ou verticais. */
 const isOrthogonalRoute = (pts: { x: number; y: number }[]): boolean => {
   for (let i = 0; i < pts.length - 1; i++) {
@@ -699,6 +716,21 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
 
   return (
     <>
+      {/* 0. Contorno claro (só aparece no modo escuro, via CSS): linhas
+          escuras sumiam sobre o fundo escuro do canvas fora das raias/quadros.
+          Nenhuma cor única funciona sobre o fundo escuro E sobre o cinza dos
+          quadros, por isso a linha mantém a cor e ganha esse contorno. */}
+      {isDarkStrokeColor(currentStroke) && !selected && !draggingHandle && (
+        <path
+          d={path}
+          fill="none"
+          className="edge-dark-casing pointer-events-none"
+          strokeWidth={Number(currentStrokeWidth) + 3}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      )}
+
       {/* 1. Main Connection Path */}
       <BaseEdge
         path={path}
