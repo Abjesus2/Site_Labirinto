@@ -1,4 +1,4 @@
-import { computeBizagiGeometry } from '../.tmp-bizagiLayout.mjs';
+import { computeBizagiGeometry, computeBizagiLanes } from '../.tmp-bizagiLayout.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -93,5 +93,25 @@ check('no horizontal todas as setas são retas/ortogonais', orthogonal(hg));
 // Seta ligada a algo que não existe (raia/junção) é descartada.
 const g2 = computeBizagiGeometry(nodes, [...edges, { id: 'x', source: 'a', target: 'nao_existe' }]);
 check('seta para forma inexistente é descartada', g2.edges.length === edges.length);
+
+// Raias: setores em sequência viram faixas horizontais empilhadas.
+{
+  const dept = new Map([['ini', 'Recebimento'], ['a', 'Recebimento'], ['b', 'Recebimento'], ['dec', 'Recebimento'], ['sim', 'Estoque'], ['nao', 'Estoque'], ['c', 'Estoque'], ['fim', '']]);
+  const lanes = computeBizagiLanes(g, dept);
+  check('dois setores em sequência viram duas raias, na ordem', lanes.length === 2 && lanes[0].name === 'Recebimento' && lanes[1].name === 'Estoque', lanes.map((l) => l.name).join(', '));
+  check('raias encostadas uma na outra (sem buraco nem sobreposição)', lanes.length === 2 && lanes[0].y2 === lanes[1].y1);
+  check('cada forma dentro da faixa da sua raia', lanes.every((l) => l.nodeIds.every((id) => { const b = g.nodes.get(id).box; return b.y >= l.y1 && b.y + b.height <= l.y2; })));
+  check('forma sem setor (fim) acompanha a faixa em que está', lanes[1].nodeIds.includes('fim'));
+  const hys = g.edges.flatMap((e) => e.points.slice(1).map((p, i) => (p.y === e.points[i].y ? p.y : null)).filter((v) => v !== null));
+  check("divisa entre raias não fica em cima de trecho horizontal de seta", hys.every((y) => Math.abs(y - lanes[0].y2) > 14));
+}
+{
+  // Setores diferentes lado a lado na mesma altura: a faixa leva os dois nomes.
+  const dept = new Map([['ini', 'A'], ['a', 'A'], ['b', 'A'], ['dec', 'A'], ['sim', 'B'], ['nao', 'C'], ['c', 'B'], ['fim', 'B']]);
+  const lanes = computeBizagiLanes(g, dept);
+  check('setores lado a lado na mesma altura dividem uma faixa com os dois nomes', lanes.some((l) => l.name === 'B / C' || l.name === 'C / B'), lanes.map((l) => l.name).join(' | '));
+}
+check('um setor só: sem raias', computeBizagiLanes(g, new Map([...g.nodes.keys()].map((id) => [id, 'Único']))).length === 0);
+check('fluxo horizontal: sem raias (evita arquivo que o Bizagi não represente)', computeBizagiLanes(hg, new Map([['s', 'A'], ['p', 'A'], ['q', 'B'], ['f', 'B']])).length === 0);
 
 console.log(R.join('\n'));

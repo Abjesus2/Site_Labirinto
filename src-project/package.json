@@ -1,13 +1,13 @@
 {
   "name": "labirinto-fluxogramas",
   "private": true,
-  "version": "2.7.23",
+  "version": "2.7.24",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:test-helpers": "esbuild src/lib/labelPlacement.ts --format=esm --outfile=.tmp-labelPlacement.mjs && esbuild src/lib/spreadsheet.ts --format=esm --outfile=.tmp-spreadsheet.mjs && esbuild src/utils/manualEdgeGeometry.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-geom.mjs && esbuild src/utils/exportFormats.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-exportFormats.mjs && esbuild src/utils/aiGenerationParser.ts --bundle --format=esm --outfile=.tmp-aiParser.mjs && esbuild src/utils/sectorContainers.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-sectorContainers.mjs && esbuild src/lib/aiBrowserBridge.ts --bundle --format=esm --outfile=.tmp-aiBridge.mjs && esbuild src/utils/alignmentGuides.ts --format=esm --outfile=.tmp-alignmentGuides.mjs && esbuild src/lib/backupReminder.ts --format=esm --outfile=.tmp-backupReminder.mjs && esbuild src/utils/bizagiLayout.ts --format=esm --outfile=.tmp-bizagiLayout.mjs",
-    "test": "npm run build && npm run build:test-helpers && node tests/app.mjs && node tests/app.mjs --embedded && node tests/labels.mjs && node tests/spreadsheet.mjs && node tests/edges.mjs && node tests/routing.mjs && node tests/exportFormats.mjs && node tests/bizagiBpm.mjs && node tests/aiParser.mjs && node tests/sectorContainers.mjs && node tests/aiPrompt.mjs && node tests/alignmentGuides.mjs && node tests/backupReminder.mjs && node tests/bizagiLayout.mjs",
+    "build:test-helpers": "esbuild src/lib/labelPlacement.ts --format=esm --outfile=.tmp-labelPlacement.mjs && esbuild src/lib/spreadsheet.ts --format=esm --outfile=.tmp-spreadsheet.mjs && esbuild src/utils/manualEdgeGeometry.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-geom.mjs && esbuild src/utils/exportFormats.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-exportFormats.mjs && esbuild src/utils/aiGenerationParser.ts --bundle --format=esm --outfile=.tmp-aiParser.mjs && esbuild src/utils/sectorContainers.ts --bundle --external:@xyflow/react --format=esm --outfile=.tmp-sectorContainers.mjs && esbuild src/lib/aiBrowserBridge.ts --bundle --format=esm --outfile=.tmp-aiBridge.mjs && esbuild src/utils/alignmentGuides.ts --format=esm --outfile=.tmp-alignmentGuides.mjs && esbuild src/lib/backupReminder.ts --format=esm --outfile=.tmp-backupReminder.mjs && esbuild src/utils/bizagiLayout.ts --format=esm --outfile=.tmp-bizagiLayout.mjs && esbuild src/utils/exportPaging.ts --format=esm --outfile=.tmp-exportPaging.mjs",
+    "test": "npm run build && npm run build:test-helpers && node tests/app.mjs && node tests/app.mjs --embedded && node tests/labels.mjs && node tests/spreadsheet.mjs && node tests/edges.mjs && node tests/routing.mjs && node tests/exportFormats.mjs && node tests/bizagiBpm.mjs && node tests/aiParser.mjs && node tests/sectorContainers.mjs && node tests/aiPrompt.mjs && node tests/alignmentGuides.mjs && node tests/backupReminder.mjs && node tests/bizagiLayout.mjs && node tests/exportPaging.mjs",
     "test:app": "node tests/app.mjs",
     "test:embedded": "node tests/app.mjs --embedded"
   },

@@ -24,7 +24,8 @@ import {
   Panel,
   getViewportForBounds
 } from '@xyflow/react';
-import { toPng, toSvg } from 'html-to-image';
+import { toPng, toSvg, toBlob, getFontEmbedCSS } from 'html-to-image';
+import JSZip from 'jszip';
 import jsPDF from 'jspdf';
 import dagre from 'dagre';
 import {
@@ -128,6 +129,7 @@ import { getObstacles, routeOrthogonalAuto, getManhattanNormal, validateRouteAga
 import { getShapeConnectionPoint } from '../utils/shapeGeometry';
 import { ensureConnectedGraph } from '../utils/graphSanitizer';
 import { computeAlignmentSnap, GuideLine, GuideRect } from '../utils/alignmentGuides';
+import { computePageCuts, singleImageScale, choosePdfLayout, MIN_READABLE_SCALE, PDF_MARGINS, Span } from '../utils/exportPaging';
 import { useTheme } from '../lib/useTheme';
 import { useBackupReminder } from '../lib/useBackupReminder';
 import { SaveStatusMenu } from './SaveStatusMenu';
@@ -3197,6 +3199,188 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     return dataUrl;
   }, [getNodes, getNodesBounds, nodes, edges]);
 
+  // ---- Exportação nítida para fluxos de qualquer tamanho (PNG/PDF) ----
+  // Antes o fluxo inteiro virava UMA imagem com no máximo 8192 px no maior
+  // lado — num fluxo comprido sobrava pouca largura e o texto ficava
+  // ilegível; no PDF essa imagem era esticada e cortada em fatias fixas,
+  // passando por cima de formas. Agora cada pedaço é capturado na escala
+  // certa (ver utils/exportPaging.ts) e os cortes caem em espaço vazio.
+  const EXPORT_FILTER = (node: any) => {
+    const cls = node?.classList;
+    if (!cls || typeof cls.contains !== 'function') return true;
+    return !(
+      cls.contains('react-flow__handle') ||
+      cls.contains('react-flow__resize-control') ||
+      cls.contains('drawio-edge-interactive-handles')
+    );
+  };
+
+  interface FlowCaptureContext {
+    viewportEl: HTMLElement;
+    /** Área total do fluxo (coordenadas do fluxo), já com margem. */
+    area: { x: number; y: number; width: number; height: number };
+    /** Faixas ocupadas por formas/textos em cada eixo (onde não se pode cortar). */
+    occupiedX: Span[];
+    occupiedY: Span[];
+    fontEmbedCSS: string;
+    /** Caixa (coordenadas do fluxo) de cada forma/linha/texto — para cada
+     * página copiar só o que aparece nela (muito mais rápido em fluxo grande). */
+    elementBoxes: Map<Element, { x1: number; y1: number; x2: number; y2: number }>;
+  }
+
+  /**
+   * Prepara a captura: tira a seleção (alças/toolbars não saem na imagem),
+   * mede tudo em coordenadas do fluxo a partir do que está desenhado na tela
+   * (formas com selos de tempo, títulos de raias/quadros, textos das
+   * linhas) e embute as fontes uma vez só para todas as páginas.
+   */
+  const withFlowCapture = useCallback(async <T,>(task: (ctx: FlowCaptureContext) => Promise<T>): Promise<T | null> => {
+    const wrapper = reactFlowWrapper.current;
+    const viewportEl = wrapper?.querySelector('.react-flow__viewport') as HTMLElement | null;
+    const containerEl = wrapper?.querySelector('.react-flow') as HTMLElement | null;
+    if (!viewportEl || !containerEl) return null;
+
+    const selectedNodeIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
+    const selectedEdgeIds = new Set(edges.filter(e => e.selected).map(e => e.id));
+    const hadSelection = selectedNodeIds.size > 0 || selectedEdgeIds.size > 0;
+    if (hadSelection) {
+      setNodes(nds => nds.map(n => (n.selected ? { ...n, selected: false } : n)));
+      setEdges(eds => eds.map(e => (e.selected ? { ...e, selected: false } : e)));
+    }
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    try {
+      const cRect = containerEl.getBoundingClientRect();
+      const vp = getViewport();
+      const toFlow = (r: DOMRect) => ({
+        x1: (r.left - cRect.left - vp.x) / vp.zoom,
+        y1: (r.top - cRect.top - vp.y) / vp.zoom,
+        x2: (r.right - cRect.left - vp.x) / vp.zoom,
+        y2: (r.bottom - cRect.top - vp.y) / vp.zoom,
+      });
+      const occupiedX: Span[] = [];
+      const occupiedY: Span[] = [];
+      const elementBoxes = new Map<Element, { x1: number; y1: number; x2: number; y2: number }>();
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      const grow = (b: { x1: number; y1: number; x2: number; y2: number }) => {
+        minX = Math.min(minX, b.x1); minY = Math.min(minY, b.y1);
+        maxX = Math.max(maxX, b.x2); maxY = Math.max(maxY, b.y2);
+      };
+      const occupy = (b: { x1: number; y1: number; x2: number; y2: number }) => {
+        occupiedX.push([b.x1, b.x2]);
+        occupiedY.push([b.y1, b.y2]);
+      };
+      const visible = (r: DOMRect) => r.width > 0 && r.height > 0;
+
+      viewportEl.querySelectorAll<HTMLElement>('.react-flow__node').forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (!visible(r)) return;
+        const box = toFlow(r);
+        grow(box);
+        const isContainer = el.classList.contains('react-flow__node-swimlane') || el.classList.contains('react-flow__node-frame');
+        if (isContainer) {
+          // Raia/quadro: não dá para evitar cortar a faixa inteira, mas o
+          // título (barra do nome) nunca pode ser cortado.
+          el.querySelectorAll<HTMLElement>('.lane-drag-handle').forEach((h) => {
+            if (!(h.textContent || '').trim()) return;
+            const hr = h.getBoundingClientRect();
+            if (visible(hr)) occupy(toFlow(hr));
+          });
+          return;
+        }
+        // Forma + tudo o que é desenhado junto dela (selo de tempo, texto).
+        let u = box;
+        el.querySelectorAll<HTMLElement>('*').forEach((child) => {
+          const cr = child.getBoundingClientRect();
+          if (!visible(cr)) return;
+          const b = toFlow(cr);
+          u = { x1: Math.min(u.x1, b.x1), y1: Math.min(u.y1, b.y1), x2: Math.max(u.x2, b.x2), y2: Math.max(u.y2, b.y2) };
+        });
+        grow(u);
+        occupy(u);
+        elementBoxes.set(el, u);
+      });
+      viewportEl.querySelectorAll<HTMLElement>('.react-flow__edgelabel-renderer > div').forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (!visible(r)) return;
+        const b = toFlow(r);
+        grow(b);
+        occupy(b);
+        elementBoxes.set(el, b);
+      });
+      viewportEl.querySelectorAll<SVGElement>('.react-flow__edge').forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 || r.height > 0) {
+          const b = toFlow(r);
+          grow(b);
+          elementBoxes.set(el, b);
+        }
+      });
+      if (!Number.isFinite(minX)) return null;
+
+      const PAD = 40;
+      const area = { x: minX - PAD, y: minY - PAD, width: maxX - minX + PAD * 2, height: maxY - minY + PAD * 2 };
+      let fontEmbedCSS = '';
+      try { fontEmbedCSS = await getFontEmbedCSS(viewportEl); } catch { fontEmbedCSS = ''; }
+      return await task({ viewportEl, area, occupiedX, occupiedY, fontEmbedCSS, elementBoxes });
+    } finally {
+      if (hadSelection) {
+        setNodes(nds => nds.map(n => (selectedNodeIds.has(n.id) ? { ...n, selected: true } : n)));
+        setEdges(eds => eds.map(e => (selectedEdgeIds.has(e.id) ? { ...e, selected: true } : e)));
+      }
+    }
+  }, [getViewport, nodes, edges]);
+
+  /** Captura um retângulo do fluxo (coordenadas do fluxo) numa escala de pixels. */
+  const captureFlowRegion = async (
+    ctx: FlowCaptureContext,
+    region: { x: number; y: number; width: number; height: number },
+    scale: number,
+  ): Promise<Blob | null> => {
+    const width = Math.max(1, Math.round(region.width * scale));
+    const height = Math.max(1, Math.round(region.height * scale));
+    return toBlob(ctx.viewportEl, {
+      backgroundColor: '#ffffff',
+      width,
+      height,
+      // pixelRatio 1: a nitidez vem da escala abaixo (antes o padrão usava a
+      // densidade da tela e podia estourar o limite do canvas).
+      pixelRatio: 1,
+      fontEmbedCSS: ctx.fontEmbedCSS || undefined,
+      // Pula formas/linhas/textos que não aparecem nesta região.
+      filter: (node: any) => {
+        if (!EXPORT_FILTER(node)) return false;
+        const b = ctx.elementBoxes.get(node);
+        if (!b) return true;
+        const m = 20;
+        return b.x2 >= region.x - m && b.x1 <= region.x + region.width + m && b.y2 >= region.y - m && b.y1 <= region.y + region.height + m;
+      },
+      style: {
+        width: `${width}px`,
+        height: `${height}px`,
+        transform: `translate(${-region.x * scale}px, ${-region.y * scale}px) scale(${scale})`,
+        transformOrigin: '0 0',
+      },
+    } as any);
+  };
+
+  const blobToDataUrl = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('download', filename);
+    a.setAttribute('href', url);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
   const runExport = useCallback(async (label: string, task: () => Promise<void>) => {
     exportCancelledRef.current = false;
     setExportStatus({ label });
@@ -3217,13 +3401,47 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setExportStatus(null);
   }, []);
 
+  // PNG: uma imagem só, nítida (escala 2, ou a maior que o navegador
+  // aguenta). Se o fluxo for grande demais para caber nítido numa imagem só,
+  // sai em partes nítidas num .zip — cortadas em espaço vazio, sem partir
+  // nenhuma forma no meio.
   const exportPng = () => runExport('Gerando imagem PNG...', async () => {
-    const dataUrl = await captureFlowDataUrl('png');
-    if (!dataUrl || exportCancelledRef.current) return;
-    const a = document.createElement('a');
-    a.setAttribute('download', `${title || 'fluxograma'}.png`);
-    a.setAttribute('href', dataUrl);
-    a.click();
+    const baseName = title || 'fluxograma';
+    await withFlowCapture(async (ctx) => {
+      const { area } = ctx;
+      const scale = singleImageScale(area.width, area.height, 2);
+      if (scale >= MIN_READABLE_SCALE) {
+        const blob = await captureFlowRegion(ctx, area, scale);
+        if (!blob || exportCancelledRef.current) return;
+        downloadBlob(blob, `${baseName}.png`);
+        return;
+      }
+      const PART_SCALE = 2;
+      const alongY = area.height >= area.width;
+      const long = alongY ? area.height : area.width;
+      const start = alongY ? area.y : area.x;
+      // Cada parte com até ~12.000 px no comprimento (6.000 unidades na escala 2).
+      const capacity = 6000;
+      const cuts = computePageCuts(start, start + long, capacity, alongY ? ctx.occupiedY : ctx.occupiedX, { minFill: 0.6, margin: 10 });
+      const zip = new JSZip();
+      for (let i = 0; i < cuts.length - 1; i++) {
+        if (exportCancelledRef.current) return;
+        setExportStatus({ label: `Gerando imagem PNG... parte ${i + 1} de ${cuts.length - 1}` });
+        const region = alongY
+          ? { x: area.x, y: cuts[i], width: area.width, height: cuts[i + 1] - cuts[i] }
+          : { x: cuts[i], y: area.y, width: cuts[i + 1] - cuts[i], height: area.height };
+        const blob = await captureFlowRegion(ctx, region, PART_SCALE);
+        if (!blob) continue;
+        zip.file(`${baseName} - parte ${String(i + 1).padStart(2, '0')}.png`, blob);
+      }
+      if (exportCancelledRef.current) return;
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      downloadBlob(zipBlob, `${baseName} (PNG em partes).zip`);
+      showToast({
+        message: `O fluxo é grande demais para uma imagem só ficar nítida — saiu em ${cuts.length - 1} partes (PNG) dentro de um .zip, cortadas entre as formas.`,
+        timeout: 10000,
+      });
+    });
   });
 
   const exportSvg = () => runExport('Gerando imagem SVG...', async () => {
@@ -3308,35 +3526,57 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
     URL.revokeObjectURL(url);
   };
 
+  // PDF: o fluxo ocupa a largura da página e segue por quantas páginas
+  // precisar; cada página é capturada separadamente em alta resolução
+  // (~200 dpi) e o corte entre páginas cai sempre num espaço vazio — nunca
+  // em cima de uma forma, de um texto de linha ou do título de uma raia.
   const exportPdf = () => runExport('Gerando PDF...', async () => {
-    const dataUrl = await captureFlowDataUrl('png');
-    if (!dataUrl || exportCancelledRef.current) return;
+    const baseName = title || 'fluxograma';
+    await withFlowCapture(async (ctx) => {
+      const { area } = ctx;
+      const alongY = area.height >= area.width;
+      const cross = alongY ? area.width : area.height;
+      const long = alongY ? area.height : area.width;
+      const layout = choosePdfLayout(cross, long, alongY ? 'y' : 'x');
+      const capacity = layout.usableLong / layout.mmPerUnit;
+      const start = alongY ? area.y : area.x;
+      const cuts = computePageCuts(start, start + long, capacity, alongY ? ctx.occupiedY : ctx.occupiedX, { minFill: 0.55, margin: 10 });
+      const pageCount = cuts.length - 1;
 
-    // Orientação escolhida pela proporção real do fluxo (não sempre
-    // paisagem) — evita desperdiçar página com fluxos altos e estreitos.
-    // getImageProperties só decodifica a imagem, então funciona com
-    // qualquer instância do jsPDF, independente da orientação dela.
-    const probeProps = new jsPDF('l', 'mm', 'a4').getImageProperties(dataUrl);
-    const orientation = probeProps.height > probeProps.width ? 'p' : 'l';
-    const pdf = new jsPDF(orientation, 'mm', 'a4');
-    const imgProps = pdf.getImageProperties(dataUrl);
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-    const scaledHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      // ~200 dpi na página: pixels por unidade do fluxo.
+      const DPI = 200;
+      const pxPerUnit = (layout.mmPerUnit / 25.4) * DPI;
 
-    if (scaledHeight <= pdfHeight) {
-      pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, scaledHeight);
-    } else {
-      // Fluxo mais alto que uma página: divide em várias páginas
-      // deslocando a mesma imagem para cima a cada página (o jsPDF recorta
-      // automaticamente o que sai da área da página).
-      const pageCount = Math.ceil(scaledHeight / pdfHeight);
+      const pdf = new jsPDF(layout.orientation, 'mm', 'a4');
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const M = PDF_MARGINS;
+
       for (let i = 0; i < pageCount; i++) {
+        if (exportCancelledRef.current) return;
+        setExportStatus({ label: `Gerando PDF... página ${i + 1} de ${pageCount}` });
+        const region = alongY
+          ? { x: area.x, y: cuts[i], width: area.width, height: cuts[i + 1] - cuts[i] }
+          : { x: cuts[i], y: area.y, width: cuts[i + 1] - cuts[i], height: area.height };
+        const blob = await captureFlowRegion(ctx, region, pxPerUnit);
+        if (!blob) continue;
+        const dataUrl = await blobToDataUrl(blob);
         if (i > 0) pdf.addPage();
-        pdf.addImage(dataUrl, 'PNG', 0, -i * pdfHeight, pdfWidth, scaledHeight);
+        const wMm = region.width * layout.mmPerUnit;
+        const hMm = region.height * layout.mmPerUnit;
+        // Centraliza no sentido transversal; encosta no início no sentido do fluxo.
+        const x = alongY ? (pageW - wMm) / 2 : M.side;
+        const y = alongY ? M.top : M.top + (pageH - M.top - M.bottom - hMm) / 2;
+        pdf.addImage(dataUrl, 'PNG', x, y, wMm, hMm, undefined, 'FAST');
+        // Rodapé: título e página, para não se perder na leitura/impressão.
+        pdf.setFontSize(8);
+        pdf.setTextColor(120);
+        pdf.text(baseName, M.side, pageH - 6);
+        pdf.text(`Página ${i + 1} de ${pageCount}`, pageW - M.side, pageH - 6, { align: 'right' });
       }
-    }
-    pdf.save(`${title || 'fluxograma'}.pdf`);
+      if (exportCancelledRef.current) return;
+      pdf.save(`${baseName}.pdf`);
+    });
   });
 
   const exportDrawio = () => {
@@ -5107,7 +5347,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
 
       {/* Floating Status Balloon */}
       {isGenerating && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-white rounded-2xl shadow-2xl border border-blue-100 p-4 w-96 flex flex-col gap-3 animate-in slide-in-from-top-4 fade-in duration-300">
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-white rounded-2xl shadow-2xl border border-blue-100 p-4 w-96 max-w-[calc(100vw-1.5rem)] flex flex-col gap-3 animate-in slide-in-from-top-4 fade-in duration-300">
            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm font-bold text-zinc-800">
                  <Loader2 size={16} className="text-blue-600 animate-spin" />
@@ -5136,7 +5376,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
           que não é acessível de uma Web Worker), não tem como ser
           interrompido no meio — só ignorado quando terminar. */}
       {exportStatus && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-white rounded-2xl shadow-2xl border border-blue-100 p-4 w-96 flex flex-col gap-3 animate-in slide-in-from-top-4 fade-in duration-300">
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] bg-white rounded-2xl shadow-2xl border border-blue-100 p-4 w-96 max-w-[calc(100vw-1.5rem)] flex flex-col gap-3 animate-in slide-in-from-top-4 fade-in duration-300">
            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm font-bold text-zinc-800">
                  <Loader2 size={16} className="text-blue-600 animate-spin" />

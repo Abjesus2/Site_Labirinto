@@ -415,3 +415,118 @@ export function computeBizagiGeometry(inputNodes: BizagiInputNode[], inputEdges:
 
   return { nodes, edges, bounds: { minX, minY, maxX, maxY }, direction };
 }
+
+/* ------------------------------------------------------------------ */
+/* Raias (lanes) do Bizagi                                              */
+/* ------------------------------------------------------------------ */
+
+export interface BizagiLane {
+  name: string;
+  /** Faixa vertical da raia (coordenadas da geometria, antes do deslocamento da pool). */
+  y1: number;
+  y2: number;
+  nodeIds: string[];
+}
+
+/**
+ * Separa o fluxo em raias horizontais (uma faixa por setor, na ordem em que
+ * os setores aparecem de cima para baixo) — o jeito que o Bizagi mostra
+ * responsabilidade por setor. O setor de cada forma vem do campo
+ * "department" da etapa ou da raia/quadro do site em que ela está.
+ *
+ * Raias não podem se sobrepor: se dois setores dividem a mesma altura
+ * (formas lado a lado de setores diferentes), a faixa leva os dois nomes
+ * ("A / B"). O mesmo setor pode aparecer em mais de uma faixa quando o
+ * fluxo volta a ele mais adiante.
+ *
+ * Só para fluxo de cima para baixo e com 2+ setores; senão devolve [].
+ */
+export function computeBizagiLanes(geom: BizagiGeometry, deptById: Map<string, string>): BizagiLane[] {
+  if (geom.direction !== 'TB') return [];
+  const distinct = new Set([...deptById.values()].map((d) => d.trim()).filter(Boolean));
+  if (distinct.size < 2) return [];
+
+  const items = [...geom.nodes.values()]
+    .map((n) => {
+      const top = Math.min(n.box.y, n.labelBox.y);
+      const bot = Math.max(n.box.y + n.box.height, n.labelBox.y + n.labelBox.height);
+      return { id: n.id, dept: (deptById.get(n.id) || '').trim(), cy: n.box.y + n.box.height / 2, top, bot };
+    })
+    .sort((a, b) => a.cy - b.cy);
+
+  // Forma sem setor acompanha a faixa em que está (ou a primeira com setor).
+  const firstDept = items.find((i) => i.dept)?.dept || '';
+  type Band = { names: string[]; top: number; bot: number; ids: string[] };
+  const bands: Band[] = [];
+  for (const it of items) {
+    const last = bands[bands.length - 1];
+    const dept = it.dept || (last ? last.names[last.names.length - 1] : firstDept);
+    if (last && last.names.includes(dept)) {
+      last.top = Math.min(last.top, it.top);
+      last.bot = Math.max(last.bot, it.bot);
+      last.ids.push(it.id);
+    } else {
+      bands.push({ names: [dept], top: it.top, bot: it.bot, ids: [it.id] });
+    }
+  }
+
+  // Faixas que se sobrepõem na altura viram uma só (nomes juntos).
+  const GAP = 12;
+  let merged = true;
+  while (merged) {
+    merged = false;
+    for (let i = 0; i < bands.length - 1; i++) {
+      const a = bands[i];
+      const b = bands[i + 1];
+      if (a.bot + GAP > b.top) {
+        b.names.forEach((n) => { if (!a.names.includes(n)) a.names.push(n); });
+        a.top = Math.min(a.top, b.top);
+        a.bot = Math.max(a.bot, b.bot);
+        a.ids.push(...b.ids);
+        bands.splice(i + 1, 1);
+        merged = true;
+        break;
+      }
+    }
+    // Duas faixas seguidas com os mesmos nomes (após juntar) viram uma.
+    for (let i = 0; i < bands.length - 1; i++) {
+      const a = bands[i];
+      const b = bands[i + 1];
+      if (a.names.length === b.names.length && a.names.every((n) => b.names.includes(n))) {
+        a.bot = Math.max(a.bot, b.bot);
+        a.ids.push(...b.ids);
+        bands.splice(i + 1, 1);
+        merged = true;
+        break;
+      }
+    }
+  }
+  if (bands.length < 2) return [];
+
+  // Divisas no espaço livre entre uma faixa e a próxima — de preferência
+  // no meio, mas nunca em cima de um trecho horizontal de seta (a divisa e
+  // a seta se confundiriam). A primeira e a última vão até as bordas.
+  const horizontalYs: number[] = [];
+  geom.edges.forEach((e) => {
+    for (let i = 0; i < e.points.length - 1; i++) {
+      if (e.points[i].y === e.points[i + 1].y) horizontalYs.push(e.points[i].y);
+    }
+  });
+  const clear = (y: number) => horizontalYs.every((hy) => Math.abs(hy - y) > 14);
+  const divider = (upper: Band, lower: Band): number => {
+    const lo = upper.bot;
+    const hi = lower.top;
+    const mid = (lo + hi) / 2;
+    const candidates = [mid];
+    for (let k = 4; k < (hi - lo) / 2; k += 4) candidates.push(mid - k, mid + k);
+    return Math.round(candidates.find(clear) ?? mid);
+  };
+  const dividers = bands.slice(0, -1).map((b, i) => divider(b, bands[i + 1]));
+  const PAD = 30;
+  return bands.map((b, i) => ({
+    name: b.names.filter(Boolean).join(' / ') || 'Processo',
+    y1: i === 0 ? geom.bounds.minY - PAD : dividers[i - 1],
+    y2: i === bands.length - 1 ? geom.bounds.maxY + PAD : dividers[i],
+    nodeIds: b.ids,
+  }));
+}

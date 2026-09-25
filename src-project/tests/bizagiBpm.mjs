@@ -134,4 +134,38 @@ check('o ponto de partida fica na borda direita do círculo, na altura do centro
   check('tarefa usa a cor padrão do Bizagi mesmo com cor própria no site', !x2.includes('FillColor="-65536"') && x2.includes(`FillColor="${((0xff << 24) | (0xec << 16) | (0xef << 8) | 0xff) | 0}"`));
 }
 
+// Raias do Bizagi a partir dos setores (campo department ou raia/quadro do site)
+{
+  const comSetor = [
+    { id: 's1', type: 'start', position: { x: 300, y: 0 }, data: { label: 'Início', timing: { department: 'Vendas' } } },
+    { id: 's2', type: 'process', position: { x: 280, y: 150 }, data: { label: 'Registrar Pedido', timing: { department: 'Vendas' } } },
+    { id: 's3', type: 'process', position: { x: 280, y: 320 }, data: { label: 'Separar Itens', timing: { department: 'Estoque' } } },
+    { id: 's4', type: 'process', position: { x: 280, y: 490 }, data: { label: 'Emitir Nota', timing: {} } },
+    { id: 's5', type: 'end', position: { x: 300, y: 660 }, data: { label: 'Fim', timing: {} } },
+    // s4/s5 sem setor, mas dentro de um quadro "Financeiro" do site
+    { id: 'q1', type: 'frame', position: { x: 200, y: 460 }, style: { width: 400, height: 300 }, data: { label: 'Financeiro' } },
+  ];
+  const ligacoes = [
+    { id: 'l1', source: 's1', target: 's2', data: {} },
+    { id: 'l2', source: 's2', target: 's3', data: {} },
+    { id: 'l3', source: 's3', target: 's4', data: {} },
+    { id: 'l4', source: 's4', target: 's5', data: {} },
+  ];
+  const b3 = await generateBizagiBpm(comSetor, ligacoes, 'Com Raias');
+  const z3 = await JSZip.loadAsync(Buffer.from(await b3.arrayBuffer()));
+  const d3 = await JSZip.loadAsync(await z3.file(Object.keys(z3.files).find((n) => n.endsWith('.diag'))).async('nodebuffer'));
+  const x3 = await d3.file('Diagram.xml').async('string');
+  const pools = [...x3.matchAll(/<Pool Id="([^"]+)" Name="([^"]*)"[^>]*>([\s\S]*?)<\/Pool>/g)];
+  const visivel = pools.find((p) => p[2] === 'Com Raias');
+  const lanes = [...visivel[3].matchAll(/<Lane Id="([^"]+)" Name="([^"]*)" ParentPool="([^"]+)"[\s\S]*?Height="(\d+)" Width="(\d+)"[^>]*><Coordinates XCoordinate="(\d+)" YCoordinate="(\d+)"/g)].map((m) => ({ id: m[1], name: m[2], parent: m[3], h: +m[4], w: +m[5], x: +m[6], y: +m[7] }));
+  check('setores viram raias na pool do fluxo (Vendas, Estoque, Financeiro)', lanes.map((l) => l.name).join(',') === 'Vendas,Estoque,Financeiro', lanes.map((l) => l.name).join(','));
+  check('raia aponta para a pool dona (ParentPool)', lanes.every((l) => l.parent === visivel[1]));
+  check('raias empilhadas sem buraco, a primeira no topo da pool', lanes[0].y === 30 && lanes.every((l, i) => i === 0 || l.y === lanes[i - 1].y + lanes[i - 1].h));
+  const poolH = +/<NodeGraphicsInfo[^>]*Height="(\d+)"/.exec(visivel[3].split('</Lanes>')[1])[1];
+  check('raias ocupam a pool inteira na altura', lanes[lanes.length - 1].y + lanes[lanes.length - 1].h === 30 + poolH, `${lanes[lanes.length - 1].y + lanes[lanes.length - 1].h} vs ${30 + poolH}`);
+  const laneOf = (name) => { const m = new RegExp(`<Activity Id="[^"]+" Name="${name}">[\\s\\S]*?LaneId="([^"]+)"`).exec(x3); return m && lanes.find((l) => l.id === m[1])?.name; };
+  check('cada forma aponta para a raia do seu setor (LaneId)', laneOf('Registrar Pedido') === 'Vendas' && laneOf('Separar Itens') === 'Estoque' && laneOf('Emitir Nota') === 'Financeiro' && laneOf('Fim') === 'Financeiro');
+  check('sem setores o arquivo continua sem raias', diagramXml.includes('<Lanes />') && !diagramXml.includes('LaneId='));
+}
+
 console.log(R.join('\n'));

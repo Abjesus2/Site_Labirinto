@@ -11,7 +11,7 @@
  * outro formato permite representar.
  */
 import { getNodeDimensions } from '../components/CustomNodes';
-import { computeBizagiGeometry, BBox as BizagiGeomBox, BizagiKind } from './bizagiLayout';
+import { computeBizagiGeometry, computeBizagiLanes, BBox as BizagiGeomBox, BizagiKind } from './bizagiLayout';
 
 interface Point {
   x: number;
@@ -319,12 +319,12 @@ const BIZAGI_FORMATTING =
  * computeBizagiGeometry (texto embaixo do evento, ao lado da decisão,
  * dentro da tarefa).
  */
-const bizagiActivityBody = (kind: BizagiKind, box: BizagiGeomBox, text: BizagiGeomBox): string => {
+const bizagiActivityBody = (kind: BizagiKind, box: BizagiGeomBox, text: BizagiGeomBox, laneId?: string): string => {
   const colorKey = kind === 'gateway' ? 'decision' : kind;
   const colors = BIZAGI_COLORS[colorKey];
   const r = Math.round;
   const graphics =
-    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${r(box.height)}" Width="${r(box.width)}" BorderColor="${hexToBizagiColor(colors.border)}" FillColor="${hexToBizagiColor(colors.fill)}" BorderVisible="false" TextX="${r(text.x)}" TextY="${r(text.y)}" TextWidth="${r(text.width)}" TextHeight="${r(text.height)}">` +
+    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler"${laneId ? ` LaneId="${laneId}"` : ''} Height="${r(box.height)}" Width="${r(box.width)}" BorderColor="${hexToBizagiColor(colors.border)}" FillColor="${hexToBizagiColor(colors.fill)}" BorderVisible="false" TextX="${r(text.x)}" TextY="${r(text.y)}" TextWidth="${r(text.width)}" TextHeight="${r(text.height)}">` +
     `<Coordinates XCoordinate="${r(box.x)}" YCoordinate="${r(box.y)}" />` +
     BIZAGI_FORMATTING +
     '<TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos>';
@@ -359,24 +359,53 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
     edges.map((e) => ({ id: e.id, source: e.source, target: e.target, label: e.label })),
   );
 
+  // Raias: setor de cada forma (campo "department" da etapa ou a raia/
+  // quadro do site em que ela está) — ver computeBizagiLanes.
+  const containers = nodes.filter((n) => n.type === 'swimlane' || n.type === 'frame');
+  const deptById = new Map<string, string>();
+  flowNodes.forEach((n) => {
+    let dept = String(n.data?.timing?.department || '').trim();
+    if (!dept) {
+      const b = getNodeBox(n);
+      const c = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+      const holder = containers
+        .map((ct) => ({ ct, box: getNodeBox(ct) }))
+        .filter(({ box }) => c.x >= box.x && c.x <= box.x + box.width && c.y >= box.y && c.y <= box.y + box.height)
+        .sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
+      if (holder) dept = String(holder.ct.data?.label || '').trim();
+    }
+    deptById.set(n.id, dept);
+  });
+  const lanes = computeBizagiLanes(geom, deptById);
+  const laneIds = lanes.map(() => uuid());
+  const laneOfNode = new Map<string, string>();
+  lanes.forEach((ln, i) => ln.nodeIds.forEach((id) => laneOfNode.set(id, laneIds[i])));
+
   // XPDL grava as formas em coordenadas absolutas dentro da "pool". A pool
-  // começa em (30,30) e tem a coluna do título à esquerda — por isso a
-  // margem esquerda maior, para nenhuma forma encostar nela.
-  const MARGIN_LEFT = 100;
+  // começa em (30,30) e tem a coluna do título à esquerda (e, com raias,
+  // mais a coluna do nome de cada raia) — por isso a margem esquerda maior,
+  // para nenhuma forma encostar nelas.
+  const POOL_X = 30;
+  const POOL_Y = 30;
+  const POOL_HEADER = 30;
+  const MARGIN_LEFT = lanes.length ? 140 : 100;
   const MARGIN = 50;
   const offsetX = (v: number) => v - geom.bounds.minX + MARGIN_LEFT;
-  const offsetY = (v: number) => v - geom.bounds.minY + MARGIN;
+  // Com raias, a primeira raia começa exatamente no topo da pool.
+  const offsetY = (v: number) => (lanes.length ? v - lanes[0].y1 + POOL_Y : v - geom.bounds.minY + MARGIN);
   const shift = (b: BizagiGeomBox): BizagiGeomBox => ({ x: offsetX(b.x), y: offsetY(b.y), width: b.width, height: b.height });
 
   const poolWidth = Math.max(200, geom.bounds.maxX - geom.bounds.minX + MARGIN_LEFT + MARGIN);
-  const poolHeight = Math.max(150, geom.bounds.maxY - geom.bounds.minY + MARGIN * 2);
+  const poolHeight = lanes.length
+    ? Math.round(offsetY(lanes[lanes.length - 1].y2) - POOL_Y)
+    : Math.max(150, geom.bounds.maxY - geom.bounds.minY + MARGIN * 2);
 
   let activitiesXml = '';
   flowNodes.forEach((n) => {
     const g = geom.nodes.get(n.id);
     if (!g) return;
     const label = xmlEscape(n.data?.label || '');
-    activitiesXml += `<Activity Id="${idMap.get(n.id)}" Name="${label}">${bizagiActivityBody(g.kind, shift(g.box), shift(g.labelBox))}</Activity>`;
+    activitiesXml += `<Activity Id="${idMap.get(n.id)}" Name="${label}">${bizagiActivityBody(g.kind, shift(g.box), shift(g.labelBox), laneOfNode.get(n.id))}</Activity>`;
   });
 
   // Ponta numa raia/quadro/junção não tem Activity correspondente e já foi
@@ -408,6 +437,26 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
   const now = new Date().toISOString();
   const safeTitle = xmlEscape(title || 'Fluxograma');
 
+  // Uma raia por faixa de setor, empilhadas de cima para baixo, ocupando a
+  // largura da pool depois da coluna do título dela.
+  const lanesXml = lanes.length
+    ? '<Lanes>' +
+      lanes
+        .map((ln, i) => {
+          const y1 = Math.round(offsetY(ln.y1));
+          const y2 = Math.round(offsetY(ln.y2));
+          return (
+            `<Lane Id="${laneIds[i]}" Name="${xmlEscape(ln.name)}" ParentPool="${visiblePoolId}">` +
+            `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${y2 - y1}" Width="${Math.round(poolWidth - POOL_HEADER)}" BorderColor="-16777216" FillColor="-1">` +
+            `<Coordinates XCoordinate="${POOL_X + POOL_HEADER}" YCoordinate="${y1}" />` +
+            '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>10</SizeFont><Bold>true</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>' +
+            '<TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos><Performers /></Lane>'
+          );
+        })
+        .join('') +
+      '</Lanes>'
+    : '<Lanes />';
+
   const diagramXml =
     '<?xml version="1.0"?>' +
     `<Package xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" OnlyOneProcess="false" Id="${diagramId}" Name="${safeTitle}" xmlns="http://www.wfmc.org/2009/XPDL2.2">` +
@@ -416,7 +465,7 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
     '<ExternalPackages />' +
     '<Pools>' +
     `<Pool Id="${mainPoolId}" Name="Processo principal" Process="${mainProcessId}" BoundaryVisible="false"><Lanes /><NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="0" Width="0" BorderColor="-16777216" FillColor="-1"><Coordinates XCoordinate="30" YCoordinate="30" /><Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>10</SizeFont><Bold>true</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting><TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos></Pool>` +
-    `<Pool Id="${visiblePoolId}" Name="${safeTitle}" Process="${visibleProcessId}" BoundaryVisible="true"><Lanes /><NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${Math.round(poolHeight)}" Width="${Math.round(poolWidth)}" BorderColor="-16777216" FillColor="-1"><Coordinates XCoordinate="30" YCoordinate="30" /><Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>10</SizeFont><Bold>true</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting><TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos></Pool>` +
+    `<Pool Id="${visiblePoolId}" Name="${safeTitle}" Process="${visibleProcessId}" BoundaryVisible="true">${lanesXml}<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${Math.round(poolHeight)}" Width="${Math.round(poolWidth)}" BorderColor="-16777216" FillColor="-1"><Coordinates XCoordinate="30" YCoordinate="30" /><Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>10</SizeFont><Bold>true</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting><TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos></Pool>` +
     '</Pools>' +
     '<WorkflowProcesses>' +
     `<WorkflowProcess Id="${mainProcessId}" Name="Processo principal"><ProcessHeader><Created>${now}</Created><Description /></ProcessHeader><RedefinableHeader><Author /><Version /><Countrykey>BR</Countrykey></RedefinableHeader><ActivitySets /><DataInputOutputs /><ExtendedAttributes /></WorkflowProcess>` +
