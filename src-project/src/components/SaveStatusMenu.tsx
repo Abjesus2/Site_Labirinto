@@ -14,6 +14,8 @@ interface SaveStatusMenuProps {
     intervalMin: number;
     due: boolean;
     remainingMs: number | null;
+    /** Ligado, mas sem alteração nova desde o último backup (não está contando). */
+    waitingForChange?: boolean;
     setIntervalMinutes: (minutes: number) => void;
     acknowledge: () => void;
   };
@@ -200,7 +202,9 @@ export const SaveStatusMenu: React.FC<SaveStatusMenuProps> = ({
                 ? 'Lembrete desligado.'
                 : reminder.due
                   ? `A cada ${describeInterval(reminder.intervalMin)} — hora de fazer backup!`
-                  : `A cada ${describeInterval(reminder.intervalMin)} · próximo em ${formatRemaining(reminder.remainingMs || 0)}`}
+                  : reminder.waitingForChange || reminder.remainingMs === null
+                    ? `A cada ${describeInterval(reminder.intervalMin)} · começa a contar na próxima alteração`
+                    : `A cada ${describeInterval(reminder.intervalMin)} depois da alteração · faltam ${formatRemaining(reminder.remainingMs)}`}
             </div>
           </div>
         </>

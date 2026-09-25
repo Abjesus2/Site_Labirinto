@@ -163,9 +163,10 @@ check('o ponto de partida fica na borda direita do círculo, na altura do centro
   check('raias empilhadas sem buraco, a primeira no topo da pool', lanes[0].y === 30 && lanes.every((l, i) => i === 0 || l.y === lanes[i - 1].y + lanes[i - 1].h));
   const poolH = +/<NodeGraphicsInfo[^>]*Height="(\d+)"/.exec(visivel[3].split('</Lanes>')[1])[1];
   check('raias ocupam a pool inteira na altura', lanes[lanes.length - 1].y + lanes[lanes.length - 1].h === 30 + poolH, `${lanes[lanes.length - 1].y + lanes[lanes.length - 1].h} vs ${30 + poolH}`);
-  // Como no arquivo nativo do Bizagi: a raia de cada forma é dada pela
-  // POSIÇÃO (forma inteira dentro da faixa), sem o atributo LaneId.
-  check('formas sem LaneId (igual ao arquivo nativo do Bizagi)', !x3.includes('LaneId='));
+  // A raia de cada forma: pelo LaneId e também pela posição (forma inteira
+  // dentro da faixa).
+  const laneIdOf = (name) => { const m = new RegExp(`<Activity Id="[^"]+" Name="${name}">[\\s\\S]*?LaneId="([^"]+)"`).exec(x3); return m && lanes.find((l) => l.id === m[1])?.name; };
+  check('cada forma aponta para a raia do seu setor (LaneId)', laneIdOf('Registrar Pedido') === 'Vendas' && laneIdOf('Separar Itens') === 'Estoque' && laneIdOf('Emitir Nota') === 'Financeiro' && laneIdOf('Fim') === 'Financeiro');
   const shapeBox = (name) => { const m = new RegExp(`<Activity Id="[^"]+" Name="${name}">[\\s\\S]*?Height="(\\d+)" Width="(\\d+)"[^>]*><Coordinates XCoordinate="(-?\\d+)" YCoordinate="(-?\\d+)"`).exec(x3); return m && { h: +m[1], w: +m[2], x: +m[3], y: +m[4] }; };
   const laneOf = (name) => { const b = shapeBox(name); return b && lanes.find((l) => b.y >= l.y && b.y + b.h <= l.y + l.h && b.x >= l.x && b.x + b.w <= l.x + l.w)?.name; };
   check('cada forma fica inteira dentro da raia do seu setor', laneOf('Registrar Pedido') === 'Vendas' && laneOf('Separar Itens') === 'Estoque' && laneOf('Emitir Nota') === 'Financeiro' && laneOf('Fim') === 'Financeiro', ['Registrar Pedido', 'Separar Itens', 'Emitir Nota', 'Fim'].map(laneOf).join(','));

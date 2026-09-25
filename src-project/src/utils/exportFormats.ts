@@ -319,12 +319,12 @@ const BIZAGI_FORMATTING =
  * computeBizagiGeometry (texto embaixo do evento, ao lado da decisão,
  * dentro da tarefa).
  */
-const bizagiActivityBody = (kind: BizagiKind, box: BizagiGeomBox, text: BizagiGeomBox): string => {
+const bizagiActivityBody = (kind: BizagiKind, box: BizagiGeomBox, text: BizagiGeomBox, laneId?: string): string => {
   const colorKey = kind === 'gateway' ? 'decision' : kind;
   const colors = BIZAGI_COLORS[colorKey];
   const r = Math.round;
   const graphics =
-    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${r(box.height)}" Width="${r(box.width)}" BorderColor="${hexToBizagiColor(colors.border)}" FillColor="${hexToBizagiColor(colors.fill)}" BorderVisible="false" TextX="${r(text.x)}" TextY="${r(text.y)}" TextWidth="${r(text.width)}" TextHeight="${r(text.height)}">` +
+    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler"${laneId ? ` LaneId="${laneId}"` : ''} Height="${r(box.height)}" Width="${r(box.width)}" BorderColor="${hexToBizagiColor(colors.border)}" FillColor="${hexToBizagiColor(colors.fill)}" BorderVisible="false" TextX="${r(text.x)}" TextY="${r(text.y)}" TextWidth="${r(text.width)}" TextHeight="${r(text.height)}">` +
     `<Coordinates XCoordinate="${r(box.x)}" YCoordinate="${r(box.y)}" />` +
     BIZAGI_FORMATTING +
     '<TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos>';
@@ -378,10 +378,11 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
   });
   const lanes = computeBizagiLanes(geom, deptById);
   const laneIds = lanes.map(() => uuid());
-  // Sem "LaneId" nas formas: o próprio Bizagi não grava esse atributo — ele
-  // descobre a raia de cada forma pela posição (por isso cada forma fica
-  // inteira dentro da sua faixa). Com o atributo, o Ctrl+Z do Bizagi depois
-  // de apagar tudo devolvia as formas amontoadas e travava a edição.
+  // Cada forma diz em qual raia está (LaneId) e também fica inteira dentro
+  // da faixa dela. Sem o LaneId o Ctrl+Z do Bizagi (depois de apagar tudo)
+  // não restaurava nada.
+  const laneOfNode = new Map<string, string>();
+  lanes.forEach((ln, i) => ln.nodeIds.forEach((id) => laneOfNode.set(id, laneIds[i])));
 
   // XPDL grava as formas em coordenadas absolutas dentro da "pool". A pool
   // começa em (30,30) e tem a coluna do título à esquerda (e, com raias,
@@ -407,7 +408,7 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
     const g = geom.nodes.get(n.id);
     if (!g) return;
     const label = xmlEscape(n.data?.label || '');
-    activitiesXml += `<Activity Id="${idMap.get(n.id)}" Name="${label}">${bizagiActivityBody(g.kind, shift(g.box), shift(g.labelBox))}</Activity>`;
+    activitiesXml += `<Activity Id="${idMap.get(n.id)}" Name="${label}">${bizagiActivityBody(g.kind, shift(g.box), shift(g.labelBox), laneOfNode.get(n.id))}</Activity>`;
   });
 
   // Ponta numa raia/quadro/junção não tem Activity correspondente e já foi

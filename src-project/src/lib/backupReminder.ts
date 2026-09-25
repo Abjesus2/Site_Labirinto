@@ -6,6 +6,10 @@
  * em quanto tempo quer ser lembrado de baixar um backup. Quando o tempo
  * chega, o botão "Salvo" muda de cor e pisca até ser clicado.
  *
+ * A contagem só começa na PRIMEIRA ALTERAÇÃO feita depois do último backup
+ * (ou do último clique no alerta): sem nada novo para salvar, o alerta não
+ * volta a piscar.
+ *
  * Estado global do navegador (não por diagrama), guardado em localStorage.
  * Módulo sem React (a parte de React fica em useBackupReminder) para poder
  * ser testado isolado.
@@ -26,11 +30,13 @@ export const BACKUP_REMINDER_PRESETS: { label: string; minutes: number }[] = [
 export interface BackupReminderState {
   /** Intervalo em minutos; 0 = lembrete desligado. */
   intervalMin: number;
-  /** Momento (ms) a partir do qual o intervalo é contado: último clique no alerta, último backup ou quando o lembrete foi ligado. */
+  /** Último clique no alerta / último backup baixado (ms). */
   lastAck: number;
+  /** Primeira alteração feita depois do último backup (ms); null = nada novo, não conta. */
+  pendingSince: number | null;
 }
 
-const DEFAULT_STATE: BackupReminderState = { intervalMin: 0, lastAck: 0 };
+const DEFAULT_STATE: BackupReminderState = { intervalMin: 0, lastAck: 0, pendingSince: null };
 
 /** Limites do valor digitado manualmente (1 minuto a 24 horas). */
 export const MIN_CUSTOM_MINUTES = 1;
@@ -50,6 +56,7 @@ export const loadBackupReminder = (): BackupReminderState => {
     return {
       intervalMin: normalizeMinutes(parsed?.intervalMin),
       lastAck: Number(parsed?.lastAck) || 0,
+      pendingSince: Number(parsed?.pendingSince) > 0 ? Number(parsed.pendingSince) : null,
     };
   } catch {
     return { ...DEFAULT_STATE };
@@ -64,12 +71,23 @@ export const saveBackupReminder = (state: BackupReminderState): void => {
   }
 };
 
-/** Milissegundos até o lembrete disparar (0 = já está vencido; null = desligado). */
+/** Milissegundos até o lembrete disparar (0 = já está vencido; null = desligado ou sem alteração para salvar). */
 export const msUntilDue = (state: BackupReminderState, now: number): number | null => {
-  if (!state.intervalMin) return null;
-  const dueAt = state.lastAck + state.intervalMin * 60_000;
+  if (!state.intervalMin || !state.pendingSince) return null;
+  const dueAt = state.pendingSince + state.intervalMin * 60_000;
   return Math.max(0, dueAt - now);
 };
+
+/** Houve uma alteração: começa a contar (se já não estiver contando). */
+export const markChanged = (state: BackupReminderState, now: number): BackupReminderState =>
+  state.pendingSince ? state : { ...state, pendingSince: now };
+
+/** Clique no alerta ou backup baixado: para de piscar e espera a próxima alteração. */
+export const acknowledgeBackup = (state: BackupReminderState, now: number): BackupReminderState => ({
+  ...state,
+  lastAck: now,
+  pendingSince: null,
+});
 
 export const isBackupDue = (state: BackupReminderState, now: number): boolean => msUntilDue(state, now) === 0;
 

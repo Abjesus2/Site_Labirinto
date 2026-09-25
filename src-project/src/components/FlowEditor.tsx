@@ -513,6 +513,16 @@ function AlignmentGuidesOverlay({ guides }: { guides: AlignmentGuidesState }) {
   );
 }
 
+/** Conteúdo do fluxo sem o que é só da tela (seleção, arraste, medidas). */
+const FLOW_UI_ONLY_KEYS = new Set(['selected', 'dragging', 'measured', 'resizing']);
+const flowContentSignature = (versions: unknown): string => {
+  try {
+    return JSON.stringify(versions ?? null, (key, value) => (FLOW_UI_ONLY_KEYS.has(key) ? undefined : value));
+  } catch {
+    return String(Math.random());
+  }
+};
+
 function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const isConnecting = useStore((s) => s.connection.inProgress);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -808,6 +818,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const newVersions = { ...allV, [vName]: { nodes: vNodes, edges: vEdges } };
       const data = getLocalDiagram(diagramId);
       if (data) {
+        // Lembrete de backup só começa a contar com alteração de verdade
+        // (selecionar, passar o mouse ou reabrir o fluxo não contam).
+        if (flowContentSignature(data.versions) !== flowContentSignature(newVersions)) backupReminder.markChanged();
         data.versions = newVersions;
         data.activeVersion = vName;
         data.showTimingMode = Boolean(timingMode);
@@ -818,7 +831,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       setIsSaving(false);
       setSaveError(false);
     }, 400);
-  }, [diagramId, versions, showTimingMode, title]);
+  }, [diagramId, versions, showTimingMode, title, backupReminder.markChanged]);
 
   // Prevent closing tab when save is pending or in progress
   useEffect(() => {
@@ -2697,6 +2710,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setSaveError(false);
     const data = getLocalDiagram(diagramId);
     if (data) {
+      if (data.title !== e.target.value) backupReminder.markChanged();
       data.title = e.target.value;
       data.updatedAt = Date.now();
       saveLocalDiagram(data);
@@ -3698,6 +3712,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
       a.setAttribute('download', `backup-labirinto-${new Date().toISOString().slice(0, 10)}.json`);
       a.setAttribute('href', url);
       a.click();
+      backupReminder.acknowledge();
       showToast({
         message: 'Backup completo baixado. Ele também contém suas chaves de IA em texto puro — guarde em local seguro (para proteger com senha, use Opções → Backup Completo na tela inicial).',
         tone: 'warn',
@@ -3716,6 +3731,8 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
     a.setAttribute('download', `${title || 'fluxograma'}.json`);
     a.setAttribute('href', url);
     a.click();
+    // Backup baixado: o lembrete espera a próxima alteração.
+    backupReminder.acknowledge();
   };
 
   // Calculate dynamic initial position for the floating toolbar
