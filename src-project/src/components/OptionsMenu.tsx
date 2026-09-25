@@ -3,7 +3,7 @@ import { Settings, ChevronDown, Moon, Sun, SearchCode, Save, FileText, Download,
 import { openAISettings } from '../lib/aiSettingsUI';
 import { downloadSystemManualFormat, ManualExportFormat } from '../utils/systemManual';
 import { useTheme } from '../lib/useTheme';
-import { setThemeMode, setThemePalette, PALETTES } from '../lib/theme';
+import { setThemeMode } from '../lib/theme';
 
 interface OptionsMenuProps {
   onOpenBackup: () => void;
@@ -12,8 +12,8 @@ interface OptionsMenuProps {
 /**
  * Botão único "Opções" na barra superior da tela inicial, reunindo tudo que
  * antes eram botões separados (Configurar IA, Backup Completo, Manual do
- * Sistema) + as opções novas de aparência (modo claro/escuro e paleta de
- * cor de destaque). O tema aplicado aqui vale pro site inteiro (inclusive
+ * Sistema) + a opção de aparência (modo claro/escuro). O tema aplicado aqui
+ * vale pro site inteiro (inclusive
  * o editor de fluxograma), já que fica salvo e é aplicado direto em <html>.
  */
 export const OptionsMenu: React.FC<OptionsMenuProps> = ({ onOpenBackup }) => {
@@ -21,7 +21,7 @@ export const OptionsMenu: React.FC<OptionsMenuProps> = ({ onOpenBackup }) => {
   const [manualOpen, setManualOpen] = useState(false);
   const [lastDownloaded, setLastDownloaded] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { mode, palette } = useTheme();
+  const { mode } = useTheme();
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -65,7 +65,7 @@ export const OptionsMenu: React.FC<OptionsMenuProps> = ({ onOpenBackup }) => {
 
             <button
               onClick={() => setThemeMode(mode === 'dark' ? 'light' : 'dark')}
-              className="w-full flex items-center justify-between px-2.5 py-2 rounded-xl hover:bg-zinc-100 transition-colors mb-2"
+              className="w-full flex items-center justify-between px-2.5 py-2 rounded-xl hover:bg-zinc-100 transition-colors"
             >
               <span className="flex items-center gap-2 text-xs font-semibold text-zinc-700">
                 {mode === 'dark' ? <Moon size={15} className="text-indigo-500" /> : <Sun size={15} className="text-amber-500" />}
@@ -80,22 +80,6 @@ export const OptionsMenu: React.FC<OptionsMenuProps> = ({ onOpenBackup }) => {
               </span>
             </button>
 
-            <span className="text-[10px] font-semibold text-zinc-400 uppercase block mb-1.5 px-2.5">Paleta de cor</span>
-            <div className="flex items-center gap-2 px-2.5 pb-1">
-              {PALETTES.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => setThemePalette(p.id)}
-                  title={p.label}
-                  className={`w-7 h-7 rounded-full flex items-center justify-center transition-transform hover:scale-110 ${
-                    palette === p.id ? 'ring-2 ring-offset-2 ring-zinc-400' : ''
-                  }`}
-                  style={{ backgroundColor: p.swatch }}
-                >
-                  {palette === p.id && <Check size={13} className="text-white" />}
-                </button>
-              ))}
-            </div>
           </div>
 
           <div className="border-t border-zinc-100 my-1.5" />

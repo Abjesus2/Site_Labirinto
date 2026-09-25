@@ -260,9 +260,9 @@ body.is-dragging-edge-handle .react-flow__node .react-flow__handle,
   .backup-due-blink { animation: none; background-color: #dc2626; }
 }
 
-/* ===== Paleta de cor de destaque (marca/botões da tela inicial e do menu de
-   opções) — troca só o "azul" da marca, nunca as cores das formas do
-   fluxograma (que não usam essas variáveis). ===== */
+/* ===== Cor de destaque (marca/botões da tela inicial e do menu de opções):
+   sempre o azul padrão — a troca de paleta foi removida. Nunca afeta as
+   cores das formas do fluxograma (que não usam essas variáveis). ===== */
 :root {
   --accent-50: #eff6ff;
   --accent-100: #dbeafe;
@@ -273,26 +273,6 @@ body.is-dragging-edge-handle .react-flow__node .react-flow__handle,
   --accent-900: #1e3a8a;
   --accent-ind-600: #4f46e5;
   --accent-ind-800: #3730a3;
-}
-html[data-palette="violeta"] {
-  --accent-50: #faf5ff; --accent-100: #f3e8ff; --accent-300: #d8b4fe;
-  --accent-500: #a855f7; --accent-600: #9333ea; --accent-700: #7e22ce; --accent-900: #581c87;
-  --accent-ind-600: #9333ea; --accent-ind-800: #6b21a8;
-}
-html[data-palette="verde"] {
-  --accent-50: #ecfdf5; --accent-100: #d1fae5; --accent-300: #6ee7b7;
-  --accent-500: #10b981; --accent-600: #059669; --accent-700: #047857; --accent-900: #064e3b;
-  --accent-ind-600: #059669; --accent-ind-800: #065f46;
-}
-html[data-palette="rosa"] {
-  --accent-50: #fdf2f8; --accent-100: #fce7f3; --accent-300: #f9a8d4;
-  --accent-500: #ec4899; --accent-600: #db2777; --accent-700: #be185d; --accent-900: #831843;
-  --accent-ind-600: #db2777; --accent-ind-800: #9d174d;
-}
-html[data-palette="laranja"] {
-  --accent-50: #fff7ed; --accent-100: #ffedd5; --accent-300: #fdba74;
-  --accent-500: #f97316; --accent-600: #ea580c; --accent-700: #c2410c; --accent-900: #7c2d12;
-  --accent-ind-600: #ea580c; --accent-ind-800: #9a3412;
 }
 /* ===== Modo escuro: raia zinc/slate invertida. Todas as regras abaixo
    EXCLUEM qualquer coisa dentro de .react-flow__node (raias, quadros e
