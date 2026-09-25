@@ -24,7 +24,7 @@ import {
   Panel,
   getViewportForBounds
 } from '@xyflow/react';
-import { toPng, toSvg, toBlob, getFontEmbedCSS } from 'html-to-image';
+import { toPng, toSvg, toBlob, toCanvas, getFontEmbedCSS } from 'html-to-image';
 import JSZip from 'jszip';
 import jsPDF from 'jspdf';
 import dagre from 'dagre';
@@ -129,7 +129,8 @@ import { getObstacles, routeOrthogonalAuto, getManhattanNormal, validateRouteAga
 import { getShapeConnectionPoint } from '../utils/shapeGeometry';
 import { ensureConnectedGraph } from '../utils/graphSanitizer';
 import { computeAlignmentSnap, GuideLine, GuideRect } from '../utils/alignmentGuides';
-import { computePageCuts, singleImageScale, choosePdfLayout, MIN_READABLE_SCALE, PDF_MARGINS, Span } from '../utils/exportPaging';
+import { computePageCuts, singleImageScale, choosePdfLayout, MIN_READABLE_SCALE, PDF_MARGINS, CANVAS_MAX_SIDE, Span } from '../utils/exportPaging';
+import { createPngStitcher, canStitchPng, stitchedScale } from '../utils/pngStitch';
 import { useTheme } from '../lib/useTheme';
 import { useBackupReminder } from '../lib/useBackupReminder';
 import { SaveStatusMenu } from './SaveStatusMenu';
@@ -3331,15 +3332,16 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     }
   }, [getViewport, nodes, edges]);
 
-  /** Captura um retângulo do fluxo (coordenadas do fluxo) numa escala de pixels. */
-  const captureFlowRegion = async (
+  /** Opções de captura de um retângulo do fluxo (coordenadas do fluxo) numa escala de pixels. */
+  const flowRegionOptions = (
     ctx: FlowCaptureContext,
     region: { x: number; y: number; width: number; height: number },
     scale: number,
-  ): Promise<Blob | null> => {
-    const width = Math.max(1, Math.round(region.width * scale));
-    const height = Math.max(1, Math.round(region.height * scale));
-    return toBlob(ctx.viewportEl, {
+    size?: { width: number; height: number },
+  ) => {
+    const width = size?.width ?? Math.max(1, Math.round(region.width * scale));
+    const height = size?.height ?? Math.max(1, Math.round(region.height * scale));
+    return {
       backgroundColor: '#ffffff',
       width,
       height,
@@ -3361,7 +3363,61 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         transform: `translate(${-region.x * scale}px, ${-region.y * scale}px) scale(${scale})`,
         transformOrigin: '0 0',
       },
-    } as any);
+    } as any;
+  };
+
+  const captureFlowRegion = (
+    ctx: FlowCaptureContext,
+    region: { x: number; y: number; width: number; height: number },
+    scale: number,
+  ): Promise<Blob | null> => toBlob(ctx.viewportEl, flowRegionOptions(ctx, region, scale));
+
+  /**
+   * PNG único e nítido de um fluxo grande demais para um canvas só: captura
+   * em faixas (e colunas, se for muito largo) na escala nítida e grava as
+   * linhas de pixels direto no arquivo PNG, uma faixa por vez.
+   */
+  const exportStitchedPng = async (ctx: FlowCaptureContext, scale: number): Promise<Blob | null> => {
+    const { area } = ctx;
+    const W = Math.max(1, Math.round(area.width * scale));
+    const H = Math.max(1, Math.round(area.height * scale));
+    const TILE_W = CANVAS_MAX_SIDE;
+    const tilesX = Math.ceil(W / TILE_W);
+    // Faixa com até ~24 milhões de pixels (memória baixa, inclusive no celular).
+    const bandH = Math.max(64, Math.min(CANVAS_MAX_SIDE, Math.floor(24_000_000 / W)));
+    const bands = Math.ceil(H / bandH);
+    const total = bands * tilesX;
+    const png = createPngStitcher(W, H);
+    try {
+      let done = 0;
+      for (let b = 0; b < bands; b++) {
+        const y0 = b * bandH;
+        const h = Math.min(bandH, H - y0);
+        let band: Uint8ClampedArray | null = tilesX > 1 ? new Uint8ClampedArray(W * h * 4) : null;
+        for (let t = 0; t < tilesX; t++) {
+          if (exportCancelledRef.current) { png.abort(); return null; }
+          done++;
+          setExportStatus({ label: `Gerando imagem PNG... parte ${done} de ${total}` });
+          const x0 = t * TILE_W;
+          const w = Math.min(TILE_W, W - x0);
+          // Posição em pixels inteiros: as partes se encaixam sem emenda.
+          const region = { x: area.x + x0 / scale, y: area.y + y0 / scale, width: w / scale, height: h / scale };
+          const canvas = await toCanvas(ctx.viewportEl, flowRegionOptions(ctx, region, scale, { width: w, height: h }));
+          const c2d = canvas.getContext('2d');
+          if (!c2d) throw new Error('canvas indisponível');
+          const data = c2d.getImageData(0, 0, w, h).data;
+          if (!band) band = data;
+          else for (let r = 0; r < h; r++) band.set(data.subarray(r * w * 4, (r + 1) * w * 4), (r * W + x0) * 4);
+          canvas.width = 0; canvas.height = 0; // libera a memória do canvas já
+        }
+        await png.writeRows(band!, h);
+      }
+      setExportStatus({ label: 'Gerando imagem PNG... juntando as partes' });
+      return await png.finish();
+    } catch (err) {
+      png.abort();
+      throw err;
+    }
   };
 
   const blobToDataUrl = (blob: Blob): Promise<string> =>
@@ -3401,17 +3457,33 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setExportStatus(null);
   }, []);
 
-  // PNG: uma imagem só, nítida (escala 2, ou a maior que o navegador
-  // aguenta). Se o fluxo for grande demais para caber nítido numa imagem só,
-  // sai em partes nítidas num .zip — cortadas em espaço vazio, sem partir
-  // nenhuma forma no meio.
+  // PNG: sempre uma imagem só e nítida (escala 2). Se o fluxo couber num
+  // canvas, é uma captura direta; se não, as partes são capturadas nítidas e
+  // costuradas num único PNG (sem perder qualidade). Só em navegador sem
+  // compressão em fluxo (muito antigo) cai no .zip com partes cortadas entre
+  // as formas.
   const exportPng = () => runExport('Gerando imagem PNG...', async () => {
     const baseName = title || 'fluxograma';
     await withFlowCapture(async (ctx) => {
       const { area } = ctx;
-      const scale = singleImageScale(area.width, area.height, 2);
-      if (scale >= MIN_READABLE_SCALE) {
-        const blob = await captureFlowRegion(ctx, area, scale);
+      const direct = singleImageScale(area.width, area.height, 2);
+      if (direct >= 2) {
+        const blob = await captureFlowRegion(ctx, area, direct);
+        if (!blob || exportCancelledRef.current) return;
+        downloadBlob(blob, `${baseName}.png`);
+        return;
+      }
+      if (canStitchPng()) {
+        const stitched = stitchedScale(area.width, area.height, 2);
+        if (stitched >= MIN_READABLE_SCALE) {
+          const blob = await exportStitchedPng(ctx, stitched);
+          if (!blob || exportCancelledRef.current) return;
+          downloadBlob(blob, `${baseName}.png`);
+          return;
+        }
+      }
+      if (direct >= MIN_READABLE_SCALE) {
+        const blob = await captureFlowRegion(ctx, area, direct);
         if (!blob || exportCancelledRef.current) return;
         downloadBlob(blob, `${baseName}.png`);
         return;
