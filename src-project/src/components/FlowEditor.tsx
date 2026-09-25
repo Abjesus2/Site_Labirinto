@@ -85,8 +85,7 @@ import {
   Spline,
   ChevronsUp,
   ChevronsDown,
-  FolderOpen,
-  AlarmClock
+  FolderOpen
 } from 'lucide-react';
 
 import { customNodeTypes, getNodeDimensions, pickBoxStyle } from './CustomNodes';
@@ -528,11 +527,13 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const backupReminder = useBackupReminder();
   // Barra superior oculta para ganhar espaço de edição (lembrado neste navegador).
   const HEADER_HIDDEN_KEY = 'labirinto_header_hidden_v1';
+  const [floatingSaveMenuOpen, setFloatingSaveMenuOpen] = useState(false);
   const [headerHidden, setHeaderHidden] = useState<boolean>(() => {
     try { return localStorage.getItem(HEADER_HIDDEN_KEY) === '1'; } catch { return false; }
   });
   const toggleHeaderHidden = (hidden: boolean) => {
     setHeaderHidden(hidden);
+    setFloatingSaveMenuOpen(false);
     try { localStorage.setItem(HEADER_HIDDEN_KEY, hidden ? '1' : '0'); } catch {}
   };
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -3926,22 +3927,33 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
       </header>
       )}
 
-      {/* Barra superior oculta: botão pequeno para trazê-la de volta. Se o
-          lembrete de backup vencer com a barra oculta, este botão também pisca. */}
+      {/* Barra superior oculta: dois botões separados no canto — "Mostrar
+          barra" (sempre) e, só quando o lembrete de backup vence, o alerta
+          "Fazer Backup!" piscando, com o mesmo menu do botão Salvo. O alerta
+          continua na tela enquanto o menu dele estiver aberto (o clique para
+          o pisca-pisca e já deixa de estar "vencido"). */}
       {headerHidden && (
-        <button
-          onClick={() => toggleHeaderHidden(false)}
-          className={`fixed top-2 right-2 z-[60] flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold shadow-lg cursor-pointer transition-colors ${
-            backupReminder.due
-              ? 'backup-due-blink border-amber-500 text-white'
-              : 'bg-white/95 border-zinc-200 text-zinc-600 hover:bg-zinc-100'
-          }`}
-          title={backupReminder.due ? 'Hora de fazer backup — mostrar a barra superior' : 'Mostrar a barra superior'}
-          aria-label="Mostrar barra superior"
-        >
-          {backupReminder.due ? <AlarmClock size={14} /> : <ChevronsDown size={14} />}
-          <span>{backupReminder.due ? 'Fazer Backup!' : 'Mostrar barra'}</span>
-        </button>
+        <div className="fixed top-2 right-2 z-[60] flex items-center gap-1.5">
+          {(backupReminder.due || floatingSaveMenuOpen) && (
+            <SaveStatusMenu
+              isSaving={isSaving}
+              saveError={!!saveError}
+              reminder={backupReminder}
+              onDownloadFlow={exportJson}
+              onDownloadFull={downloadFullBackup}
+              onOpenChange={setFloatingSaveMenuOpen}
+            />
+          )}
+          <button
+            onClick={() => toggleHeaderHidden(false)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold shadow-lg cursor-pointer transition-colors bg-white/95 border-zinc-200 text-zinc-600 hover:bg-zinc-100"
+            title="Mostrar a barra superior"
+            aria-label="Mostrar barra superior"
+          >
+            <ChevronsDown size={14} />
+            <span>Mostrar barra</span>
+          </button>
+        </div>
       )}
 
       {/* MIRO CANVAS WORKSPACE */}

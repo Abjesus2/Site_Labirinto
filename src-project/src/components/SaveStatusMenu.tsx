@@ -21,6 +21,9 @@ interface SaveStatusMenuProps {
   onDownloadFlow: () => void;
   /** Baixa o backup completo (todos os diagramas e pastas deste navegador). */
   onDownloadFull: () => void;
+  /** Avisado quando o menu abre/fecha (o alerta flutuante da barra oculta
+   * precisa continuar na tela enquanto o menu estiver aberto). */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -34,8 +37,17 @@ export const SaveStatusMenu: React.FC<SaveStatusMenuProps> = ({
   reminder,
   onDownloadFlow,
   onDownloadFull,
+  onOpenChange,
 }) => {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  // Avisa quem está fora no MESMO clique (não num efeito depois): o alerta
+  // flutuante da barra oculta some quando deixa de estar "vencido", e o
+  // clique que abre o menu é o mesmo que para o pisca-pisca — avisando só
+  // depois, o botão sumia antes de o menu chegar a abrir.
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    onOpenChange?.(next);
+  };
   const buttonRef = useRef<HTMLButtonElement>(null);
   // Posição do menu calculada na hora de abrir: no celular a barra quebra em
   // linhas e o botão pode ficar perto da borda esquerda — alinhar o menu pela
@@ -45,7 +57,6 @@ export const SaveStatusMenu: React.FC<SaveStatusMenuProps> = ({
   const isPreset = BACKUP_REMINDER_PRESETS.some((p) => p.minutes === reminder.intervalMin);
 
   const handleButton = () => {
-    if (reminder.due) reminder.acknowledge();
     if (!open && buttonRef.current) {
       const r = buttonRef.current.getBoundingClientRect();
       const width = Math.min(288, window.innerWidth - 16);
@@ -53,7 +64,8 @@ export const SaveStatusMenu: React.FC<SaveStatusMenuProps> = ({
       const top = r.bottom + 8;
       setMenuPos({ left, top, width, maxHeight: Math.max(160, window.innerHeight - top - 8) });
     }
-    setOpen((v) => !v);
+    setOpen(!open);
+    if (reminder.due) reminder.acknowledge();
   };
 
   const download = (fn: () => void) => {
