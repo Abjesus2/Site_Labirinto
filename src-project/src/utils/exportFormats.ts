@@ -11,6 +11,7 @@
  * outro formato permite representar.
  */
 import { getNodeDimensions } from '../components/CustomNodes';
+import { computeBizagiGeometry, BBox as BizagiGeomBox, BizagiKind } from './bizagiLayout';
 
 interface Point {
   x: number;
@@ -276,7 +277,6 @@ export function generateBpmnXml(nodes: any[], edges: any[]): string {
  * sempre da mesma forma, reproduzidos aqui como estão.
  */
 
-interface BizagiBox extends Box {}
 
 // Formato de cor do Bizagi: inteiro ARGB (alpha sempre 0xFF) interpretado
 // como int32 COM SINAL — por isso os valores gravados no arquivo real são
@@ -308,58 +308,34 @@ const uuid = (): string => {
   });
 };
 
+const BIZAGI_FORMATTING =
+  '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>8</SizeFont><Bold>false</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>';
+
 /**
- * Lado mais próximo de "box" na direção de "otherBox" — mesma convenção de
- * porta observada no arquivo de exemplo real do Bizagi (1=Cima, 2=Baixo,
- * 4=Direita; 3=Esquerda por simetria com o par 1/2). Devolve também o
- * ponto exato na borda daquele lado, pra não desenhar a linha saindo do
- * CENTRO da forma (que sem FromPort/ToPort o Bizagi cruza direto por cima
- * de qualquer forma no caminho, em vez de recortar na borda).
+ * Corpo XPDL de uma forma no Bizagi. Sempre com as formas e cores NATIVAS
+ * do Bizagi (círculo verde de início, círculo vermelho de fim, losango
+ * amarelo de decisão, tarefa azul-clara) — as cores do site deixavam o
+ * diagrama diferente do padrão Bizagi. O tamanho e a área do texto vêm de
+ * computeBizagiGeometry (texto embaixo do evento, ao lado da decisão,
+ * dentro da tarefa).
  */
-const getBizagiPort = (box: BizagiBox, otherBox: BizagiBox): { port: number; point: Point } => {
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-  const dx = otherBox.x + otherBox.width / 2 - cx;
-  const dy = otherBox.y + otherBox.height / 2 - cy;
-
-  if (Math.abs(dy) >= Math.abs(dx)) {
-    return dy >= 0
-      ? { port: 2, point: { x: cx, y: box.y + box.height } } // sai pela base
-      : { port: 1, point: { x: cx, y: box.y } }; // sai pelo topo
-  }
-  return dx >= 0
-    ? { port: 4, point: { x: box.x + box.width, y: cy } } // sai pela direita
-    : { port: 3, point: { x: box.x, y: cy } }; // sai pela esquerda
-};
-
-const bizagiActivityBody = (node: any, box: BizagiBox): string => {
-  const override = node.data?.styleOverride || {};
-  let colorKey = 'task';
-  if (node.type === 'start') colorKey = 'start';
-  else if (node.type === 'end') colorKey = 'end';
-  else if (node.type === 'decision') colorKey = 'decision';
-  const defaults = BIZAGI_COLORS[colorKey];
-  const fillColor = hexToBizagiColor(override.backgroundColor || defaults.fill);
-  const borderColor = hexToBizagiColor(override.borderColor || defaults.border);
-
-  // TextX/TextY/TextWidth/TextHeight ausentes fazem o Bizagi jogar o rótulo
-  // pra FORA da forma (abaixo dela) em vez de centralizado dentro — visto
-  // no arquivo de exemplo real, onde o evento de início trazia esses
-  // atributos apontando pra cima da própria área da forma (mesmo
-  // X/Y/Width/Height do NodeGraphicsInfo).
+const bizagiActivityBody = (kind: BizagiKind, box: BizagiGeomBox, text: BizagiGeomBox): string => {
+  const colorKey = kind === 'gateway' ? 'decision' : kind;
+  const colors = BIZAGI_COLORS[colorKey];
+  const r = Math.round;
   const graphics =
-    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${Math.round(box.height)}" Width="${Math.round(box.width)}" BorderColor="${borderColor}" FillColor="${fillColor}" BorderVisible="false" TextX="${Math.round(box.x)}" TextY="${Math.round(box.y)}" TextWidth="${Math.round(box.width)}" TextHeight="${Math.round(box.height)}">` +
-    `<Coordinates XCoordinate="${Math.round(box.x)}" YCoordinate="${Math.round(box.y)}" />` +
-    '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>8</SizeFont><Bold>false</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>' +
+    `<NodeGraphicsInfos><NodeGraphicsInfo ToolId="BizAgi_Process_Modeler" Height="${r(box.height)}" Width="${r(box.width)}" BorderColor="${hexToBizagiColor(colors.border)}" FillColor="${hexToBizagiColor(colors.fill)}" BorderVisible="false" TextX="${r(text.x)}" TextY="${r(text.y)}" TextWidth="${r(text.width)}" TextHeight="${r(text.height)}">` +
+    `<Coordinates XCoordinate="${r(box.x)}" YCoordinate="${r(box.y)}" />` +
+    BIZAGI_FORMATTING +
     '<TextDirection xsi:nil="true" /></NodeGraphicsInfo></NodeGraphicsInfos>';
 
-  if (node.type === 'start') {
+  if (kind === 'start') {
     return `<Description /><Event><StartEvent Trigger="None" /></Event><Documentation />${graphics}<ExtendedAttributes><ExtendedAttribute Name="RuntimeProperties" Value="{}" /></ExtendedAttributes>`;
   }
-  if (node.type === 'end') {
+  if (kind === 'end') {
     return `<Description /><Event><EndEvent Result="None" /></Event><Documentation />${graphics}<ExtendedAttributes><ExtendedAttribute Name="RuntimeProperties" Value="{}" /></ExtendedAttributes>`;
   }
-  if (node.type === 'decision') {
+  if (kind === 'gateway') {
     return `<Description /><Route /><Documentation />${graphics}<ExtendedAttributes />`;
   }
   // Qualquer outra forma (processo, documento, banco de dados, subprocesso,
@@ -376,68 +352,51 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
   const idMap = new Map<string, string>();
   flowNodes.forEach((n) => idMap.set(n.id, uuid()));
 
-  // XPDL grava as formas em coordenadas absolutas dentro do espaço do
-  // próprio "pool" que as contém — desloca tudo para caber com uma margem
-  // pequena a partir de (30,30), igual ao que o Bizagi Modeler grava.
-  const boxes = flowNodes.map((n) => getNodeBox(n));
-  const minX = boxes.length ? Math.min(...boxes.map((b) => b.x)) : 0;
-  const minY = boxes.length ? Math.min(...boxes.map((b) => b.y)) : 0;
-  const maxX = boxes.length ? Math.max(...boxes.map((b) => b.x + b.width)) : 700;
-  const maxY = boxes.length ? Math.max(...boxes.map((b) => b.y + b.height)) : 350;
-  const MARGIN = 50;
-  const offsetX = (v: number) => v - minX + MARGIN;
-  const offsetY = (v: number) => v - minY + MARGIN;
+  // Geometria nativa do Bizagi (tamanhos, área do texto e setas
+  // recalculadas) — ver utils/bizagiLayout.ts.
+  const geom = computeBizagiGeometry(
+    flowNodes.map((n) => ({ id: n.id, type: n.type, box: getNodeBox(n) })),
+    edges.map((e) => ({ id: e.id, source: e.source, target: e.target, label: e.label })),
+  );
 
-  const poolWidth = Math.max(200, maxX - minX + MARGIN * 2);
-  const poolHeight = Math.max(150, maxY - minY + MARGIN * 2);
+  // XPDL grava as formas em coordenadas absolutas dentro da "pool". A pool
+  // começa em (30,30) e tem a coluna do título à esquerda — por isso a
+  // margem esquerda maior, para nenhuma forma encostar nela.
+  const MARGIN_LEFT = 100;
+  const MARGIN = 50;
+  const offsetX = (v: number) => v - geom.bounds.minX + MARGIN_LEFT;
+  const offsetY = (v: number) => v - geom.bounds.minY + MARGIN;
+  const shift = (b: BizagiGeomBox): BizagiGeomBox => ({ x: offsetX(b.x), y: offsetY(b.y), width: b.width, height: b.height });
+
+  const poolWidth = Math.max(200, geom.bounds.maxX - geom.bounds.minX + MARGIN_LEFT + MARGIN);
+  const poolHeight = Math.max(150, geom.bounds.maxY - geom.bounds.minY + MARGIN * 2);
 
   let activitiesXml = '';
   flowNodes.forEach((n) => {
-    const box = getNodeBox(n);
-    const offsetBox: BizagiBox = { x: offsetX(box.x), y: offsetY(box.y), width: box.width, height: box.height };
+    const g = geom.nodes.get(n.id);
+    if (!g) return;
     const label = xmlEscape(n.data?.label || '');
-    activitiesXml += `<Activity Id="${idMap.get(n.id)}" Name="${label}">${bizagiActivityBody(n, offsetBox)}</Activity>`;
+    activitiesXml += `<Activity Id="${idMap.get(n.id)}" Name="${label}">${bizagiActivityBody(g.kind, shift(g.box), shift(g.labelBox))}</Activity>`;
   });
 
-  const nodeById = new Map(flowNodes.map((n) => [n.id, n]));
+  // Ponta numa raia/quadro/junção não tem Activity correspondente e já foi
+  // descartada pela geometria (sem isso o From/To apontaria para um Id
+  // inexistente, o mesmo tipo de XML inválido que quebrava a importação).
+  const labelByEdge = new Map(edges.map((e) => [e.id, e.label]));
   let transitionsXml = '';
-  edges.forEach((e) => {
-    const sourceId = idMap.get(e.source);
-    const targetId = idMap.get(e.target);
-    // Ponta numa raia/quadro/junção não tem Activity correspondente — sem
-    // isso o From/To apontaria pra um Id inexistente, o mesmo tipo de XML
-    // inválido que quebrava a importação BPMN.
+  geom.edges.forEach((ge) => {
+    const sourceId = idMap.get(ge.source);
+    const targetId = idMap.get(ge.target);
     if (!sourceId || !targetId) return;
-
-    const source = nodeById.get(e.source);
-    const target = nodeById.get(e.target);
-    const sBox = getNodeBox(source);
-    const tBox = getNodeBox(target);
-    const sOff: BizagiBox = { x: offsetX(sBox.x), y: offsetY(sBox.y), width: sBox.width, height: sBox.height };
-    const tOff: BizagiBox = { x: offsetX(tBox.x), y: offsetY(tBox.y), width: tBox.width, height: tBox.height };
-
-    // Sem FromPort/ToPort, o Bizagi não recorta a linha na borda da forma —
-    // ele desenha reto de ponto a ponto, então um waypoint no CENTRO
-    // atravessa a forma inteira (visível no teste real: uma coluna de
-    // formas empilhadas verticalmente virava uma única linha reta
-    // cruzando por dentro de todas elas). getBizagiPort calcula o lado
-    // mais próximo pela posição relativa entre origem e destino (a mesma
-    // convenção 1=Cima/2=Baixo/3=Esquerda/4=Direita vista no arquivo de
-    // exemplo real) e devolve o ponto exato na BORDA daquele lado.
-    const { port: fromPort, point: fromPoint } = getBizagiPort(sOff, tOff);
-    const { port: toPort, point: toPoint } = getBizagiPort(tOff, sOff);
-
-    const controlPoints: Point[] = Array.isArray(e.data?.controlPoints)
-      ? e.data.controlPoints.map((p: Point) => ({ x: offsetX(p.x), y: offsetY(p.y) }))
-      : [];
-    const waypoints = [fromPoint, ...controlPoints, toPoint];
-    const coords = waypoints.map((p) => `<Coordinates XCoordinate="${Math.round(p.x)}" YCoordinate="${Math.round(p.y)}" />`).join('');
-
-    const nameAttr = e.label ? ` Name="${xmlEscape(e.label)}"` : '';
+    const coords = ge.points
+      .map((p) => `<Coordinates XCoordinate="${Math.round(offsetX(p.x))}" YCoordinate="${Math.round(offsetY(p.y))}" />`)
+      .join('');
+    const edgeLabel = labelByEdge.get(ge.id);
+    const nameAttr = edgeLabel ? ` Name="${xmlEscape(edgeLabel)}"` : '';
     transitionsXml +=
       `<Transition Id="${uuid()}" From="${sourceId}" To="${targetId}"${nameAttr}><Condition /><Description />` +
-      `<ConnectorGraphicsInfos><ConnectorGraphicsInfo FromPort="${fromPort}" ToPort="${toPort}" ToolId="BizAgi_Process_Modeler" BorderColor="-16777216">` +
-      '<Formatting><Alignment>Center</Alignment><FontName>Segoe UI</FontName><SizeFont>8</SizeFont><Bold>false</Bold><Italic>false</Italic><Strikeout>false</Strikeout><Underline>false</Underline><ColorFont>-16777216</ColorFont></Formatting>' +
+      `<ConnectorGraphicsInfos><ConnectorGraphicsInfo FromPort="${ge.fromPort}" ToPort="${ge.toPort}" ToolId="BizAgi_Process_Modeler" BorderColor="-16777216">` +
+      BIZAGI_FORMATTING +
       `<TextDirection xsi:nil="true" />${coords}</ConnectorGraphicsInfo></ConnectorGraphicsInfos><ExtendedAttributes /></Transition>`;
   });
 

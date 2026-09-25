@@ -78,43 +78,60 @@ check('decisão usa a cor amarela padrão do Bizagi (FillColor=-52)', diagramXml
 // rótulo da forma saía flutuando ABAIXO dela em vez de dentro — inclusive
 // deixando a impressão de "forma sem texto" numa decisão com nome longo.
 check(
-  'toda forma leva TextX/TextY/TextWidth/TextHeight (rótulo fica dentro da forma, não flutuando fora)',
+  'toda forma leva a área do texto explícita (TextX/TextY/TextWidth/TextHeight) — dentro da tarefa, fora de eventos e decisões',
   /<NodeGraphicsInfo[^>]*TextX="\d+"[^>]*TextY="\d+"[^>]*TextWidth="\d+"[^>]*TextHeight="\d+"/.test(diagramXml)
 );
 
-// Outro bug real: sem FromPort/ToPort e com o waypoint inicial/final no
-// CENTRO da forma (em vez da borda), o Bizagi não recorta a linha —
-// formas alinhadas na mesma coluna viravam uma única linha reta
-// atravessando por dentro de todas elas. Confere que a Transition
-// Início -> Receber Pedido sai da BORDA direita de "Início" (n1 é mais
-// estreito e fica à esquerda de n2), não do centro dele.
-const activityId = (name) => {
-  const m = new RegExp(`<Activity Id="([0-9a-f-]+)" Name="${name}"`, 'i').exec(diagramXml);
-  return m ? m[1] : null;
-};
-const inicioId = activityId('Início');
-const pedidoId = activityId('Receber Pedido');
-check('achou os IDs gerados das activities "Início" e "Receber Pedido"', !!inicioId && !!pedidoId);
+// Formas nativas do Bizagi (antes vinham com o tamanho do site: início
+// 160x48 virava uma elipse larga e a decisão um losango gigante com o texto
+// cortando a forma).
+const activities = [...diagramXml.matchAll(/<Activity Id="([^"]+)" Name="([^"]*)">([\s\S]*?)<\/Activity>/g)].map(([, id, name, body]) => {
+  const m = /Height="(\d+)" Width="(\d+)" BorderColor="(-?\d+)" FillColor="(-?\d+)"[^>]*TextX="(-?\d+)" TextY="(-?\d+)" TextWidth="(\d+)" TextHeight="(\d+)"><Coordinates XCoordinate="(-?\d+)" YCoordinate="(-?\d+)"/.exec(body);
+  return { id, name, h: +m[1], w: +m[2], fill: +m[4], tx: +m[5], ty: +m[6], tw: +m[7], th: +m[8], x: +m[9], y: +m[10] };
+});
+const act = (name) => activities.find((a) => a.name === name);
+const inicio = act('Início');
+const fim = act('Fim');
+const aprovado = act('Aprovado?');
+const pedido = act('Receber Pedido');
+check('início é o círculo pequeno do Bizagi (30x30)', inicio.w === 30 && inicio.h === 30, `${inicio.w}x${inicio.h}`);
+check('fim é o círculo pequeno do Bizagi (30x30)', fim.w === 30 && fim.h === 30);
+check('decisão é o losango pequeno do Bizagi (40x40)', aprovado.w === 40 && aprovado.h === 40, `${aprovado.w}x${aprovado.h}`);
+const outside = (a) => a.tx + a.tw <= a.x || a.tx >= a.x + a.w || a.ty + a.th <= a.y || a.ty >= a.y + a.h;
+check('texto do início fica FORA do círculo', outside(inicio), JSON.stringify(inicio));
+check('texto do fim fica FORA do círculo', outside(fim));
+check('texto da decisão fica FORA do losango', outside(aprovado), JSON.stringify(aprovado));
+check('texto da tarefa fica DENTRO da tarefa', pedido.tx === pedido.x && pedido.ty === pedido.y && pedido.tw === pedido.w && pedido.th === pedido.h);
+check('formas não encostam na coluna do título da pool (x >= 100)', activities.every((a) => a.x >= 100 && a.tx >= 60), String(Math.min(...activities.map((a) => a.x))));
 
-const transRegex = new RegExp(`<Transition Id="[0-9a-f-]+" From="${inicioId}" To="${pedidoId}"[^>]*>([\\s\\S]*?)</Transition>`);
-const transMatch = transRegex.exec(diagramXml);
-check('achou a Transition Início -> Receber Pedido', !!transMatch);
-if (transMatch) {
-  check('a Transition leva FromPort e ToPort (o Bizagi não recorta a linha na borda sem isso)', /FromPort="4"/.test(transMatch[0]) && /ToPort="3"/.test(transMatch[0]));
-  const coordMatches = [...transMatch[1].matchAll(/<Coordinates XCoordinate="(\d+)" YCoordinate="(\d+)"/g)];
-  check('a Transition tem pelo menos 2 pontos (início e fim)', coordMatches.length >= 2);
-  if (coordMatches.length >= 2) {
-    const firstX = Number(coordMatches[0][1]);
-    const firstY = Number(coordMatches[0][2]);
-    // Nas posições do fixture (n1 start em x:100,y:100,160x48; n2 process
-    // em x:300,y:100,210x60; deslocados pro espaço do Bizagi com margem
-    // 50 a partir do (minX,minY) global de todos os nós), "Início" fica em
-    // x:[50,210] y:[100,148] — como "Receber Pedido" está à direita dele, a
-    // linha tem de sair exatamente da borda direita (x=210, y=124 =
-    // centro vertical), não do centro da forma (que seria x=130).
-    check('o ponto de partida da linha fica na borda direita de "Início" (x=210), não no centro (x=130)', firstX === 210, 'firstX=' + firstX);
-    check('o ponto de partida fica no centro vertical de "Início" (y=124)', firstY === 124, 'firstY=' + firstY);
-  }
+// Setas: sempre em trechos retos (horizontal/vertical), da borda da origem
+// até a borda do destino.
+const transitions = [...diagramXml.matchAll(/<Transition Id="[^"]+" From="([^"]+)" To="([^"]+)"[^>]*>([\s\S]*?)<\/Transition>/g)].map(([, f, t, body]) => ({
+  f, t, from: +/FromPort="(\d)"/.exec(body)[1], to: +/ToPort="(\d)"/.exec(body)[1],
+  pts: [...body.matchAll(/XCoordinate="(-?\d+)" YCoordinate="(-?\d+)"/g)].map((m) => ({ x: +m[1], y: +m[2] })),
+}));
+const byId = new Map(activities.map((a) => [a.id, a]));
+const orto = transitions.every((tr) => tr.pts.every((p, i) => i === 0 || p.x === tr.pts[i - 1].x || p.y === tr.pts[i - 1].y));
+check('todas as setas só têm trechos horizontais/verticais', orto);
+const onBorder = (p, n) => ((Math.abs(p.x - n.x) <= 1 || Math.abs(p.x - n.x - n.w) <= 1) && p.y >= n.y - 1 && p.y <= n.y + n.h + 1) || ((Math.abs(p.y - n.y) <= 1 || Math.abs(p.y - n.y - n.h) <= 1) && p.x >= n.x - 1 && p.x <= n.x + n.w + 1);
+check('toda seta começa na borda da origem e termina na borda do destino', transitions.every((tr) => onBorder(tr.pts[0], byId.get(tr.f)) && onBorder(tr.pts[tr.pts.length - 1], byId.get(tr.t))));
+const portOk = (p, n, port) => ({ 1: Math.abs(p.y - n.y) <= 1, 2: Math.abs(p.y - n.y - n.h) <= 1, 3: Math.abs(p.x - n.x) <= 1, 4: Math.abs(p.x - n.x - n.w) <= 1 })[port];
+check('FromPort/ToPort batem com o lado de onde a seta sai/entra', transitions.every((tr) => portOk(tr.pts[0], byId.get(tr.f), tr.from) && portOk(tr.pts[tr.pts.length - 1], byId.get(tr.t), tr.to)));
+
+// Início -> Receber Pedido estão lado a lado: sai pela direita do círculo,
+// na altura do centro dele, e entra pela esquerda da tarefa.
+const tIni = transitions.find((tr) => tr.f === inicio.id && tr.t === pedido.id);
+check('Início -> Receber Pedido sai pela direita (4) e entra pela esquerda (3)', tIni && tIni.from === 4 && tIni.to === 3);
+check('o ponto de partida fica na borda direita do círculo, na altura do centro', tIni && tIni.pts[0].x === inicio.x + inicio.w && tIni.pts[0].y === inicio.y + inicio.h / 2, tIni && JSON.stringify(tIni.pts[0]));
+
+// Cores do site não vão para o Bizagi: sempre as cores padrão dele.
+{
+  const colorido = nodes.map((n) => (n.id === 'n2' ? { ...n, data: { ...n.data, styleOverride: { backgroundColor: '#ff0000', borderColor: '#00ff00' } } } : n));
+  const b2 = await generateBizagiBpm(colorido, edges, 'Cores');
+  const z2 = await JSZip.loadAsync(Buffer.from(await b2.arrayBuffer()));
+  const d2 = await JSZip.loadAsync(await z2.file(Object.keys(z2.files).find((n) => n.endsWith('.diag'))).async('nodebuffer'));
+  const x2 = await d2.file('Diagram.xml').async('string');
+  check('tarefa usa a cor padrão do Bizagi mesmo com cor própria no site', !x2.includes('FillColor="-65536"') && x2.includes(`FillColor="${((0xff << 24) | (0xec << 16) | (0xef << 8) | 0xff) | 0}"`));
 }
 
 console.log(R.join('\n'));
