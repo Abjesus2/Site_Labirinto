@@ -86,7 +86,8 @@ import {
   Spline,
   ChevronsUp,
   ChevronsDown,
-  FolderOpen
+  FolderOpen,
+  Eraser
 } from 'lucide-react';
 
 import { customNodeTypes, getNodeDimensions, pickBoxStyle } from './CustomNodes';
@@ -515,6 +516,10 @@ function AlignmentGuidesOverlay({ guides }: { guides: AlignmentGuidesState }) {
   );
 }
 
+/** Nada para limpar no alcance escolhido? (etapas ou ligações soltas contam) */
+const scopeIsEmpty = (scope: 'todas' | 'atual', totalAll: number, current: number, activeV?: { edges?: any[] }): boolean =>
+  scope === 'todas' ? totalAll === 0 : current === 0 && !(activeV?.edges?.length);
+
 /** Conteúdo do fluxo sem o que é só da tela (seleção, arraste, medidas). */
 const FLOW_UI_ONLY_KEYS = new Set(['selected', 'dragging', 'measured', 'resizing']);
 const flowContentSignature = (versions: unknown): string => {
@@ -614,6 +619,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     };
     reader.readAsText(file);
   };
+  // "Limpar diagrama": confirmação aberta e o alcance escolhido.
+  const [clearDiagramOpen, setClearDiagramOpen] = useState(false);
+  const [clearScope, setClearScope] = useState<'todas' | 'atual'>('todas');
   // Arquivo .json lido, esperando a escolha das versões no modal.
   const [importFile, setImportFile] = useState<ImportFile | null>(null);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
@@ -2293,6 +2301,46 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       showToast({ message: `Importado: ${parts.join(', ')}.`, timeout: 8000 });
     },
     [importFile, liveVersions, activeVersion, getViewport, pushHistory, saveToCloud, diagramId, fitView, setNodes, setEdges],
+  );
+
+  /**
+   * Limpar diagrama: apaga as etapas e ligações (com tempos, setores, textos)
+   * de todas as versões ou só da aberta. O título fica. O aviso de sucesso
+   * traz "Desfazer" por alguns segundos, que devolve tudo como estava.
+   */
+  const clearDiagram = useCallback(
+    (scope: 'todas' | 'atual') => {
+      const snapshot = liveVersions();
+      const snapshotVersion = activeVersion;
+      const next: typeof versions = { ...snapshot };
+      Object.keys(next).forEach((k) => {
+        if (scope === 'todas' || k === activeVersion) next[k] = { nodes: [], edges: [] };
+      });
+      setVersions(next);
+      setNodes([]);
+      setEdges([]);
+      setSelectedEdge(null);
+      pushHistory([], [], scope === 'todas' ? 'Limpou o diagrama (todas as versões)' : 'Limpou a versão');
+      saveToCloud(activeVersion, [], [], next);
+      const restore = () => {
+        const back = snapshot[snapshotVersion] || { nodes: [], edges: [] };
+        setVersions(snapshot);
+        setActiveVersion(snapshotVersion);
+        setNodes(back.nodes as Node[]);
+        setEdges(back.edges as Edge[]);
+        pushHistory(back.nodes as Node[], back.edges as Edge[], 'Desfez a limpeza do diagrama');
+        saveToCloud(snapshotVersion, back.nodes as Node[], back.edges as Edge[], snapshot);
+        setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 80);
+        showToast({ message: 'Diagrama restaurado.', timeout: 4000 });
+      };
+      showToast({
+        message: scope === 'todas' ? 'Diagrama limpo (todas as versões).' : `Versão "${activeVersion}" limpa.`,
+        actionLabel: 'Desfazer',
+        onAction: restore,
+        timeout: 15000,
+      });
+    },
+    [liveVersions, activeVersion, pushHistory, saveToCloud, fitView, setNodes, setEdges],
   );
 
   const applyIncomingFlow = useCallback(
@@ -4244,6 +4292,17 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                     <span>Bizagi Modeler</span>
                     <span className="text-[10px] text-zinc-400">.bpm</span>
                   </button>
+
+                  <div className="h-px bg-zinc-100 my-1" />
+                  <button
+                    onClick={() => { setClearScope('todas'); setClearDiagramOpen(true); setShowExportMenu(false); }}
+                    className="w-full px-4 py-2 text-left font-semibold text-red-600 hover:bg-red-50 flex items-center justify-between"
+                    title="Apaga todas as etapas, ligações e informações do diagrama (pede confirmação)"
+                    data-clear-diagram
+                  >
+                    <span>Limpar diagrama</span>
+                    <Eraser size={14} />
+                  </button>
                 </div>
               </>
             )}
@@ -5507,6 +5566,79 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
            </div>
         </div>
       )}
+
+      {/* Limpar diagrama: confirmação */}
+      {clearDiagramOpen && (() => {
+        const live = liveVersions();
+        const count = (v: any) => (v?.nodes?.length || 0) + (v?.edges?.length || 0);
+        const totalAll = Object.values(live).reduce((sum: number, v: any) => sum + (v?.nodes?.length || 0), 0);
+        const withContent = Object.entries(live).filter(([, v]: any) => count(v) > 0).map(([k]) => k);
+        const current = live[activeVersion]?.nodes?.length || 0;
+        const label = (n: string) => n.charAt(0).toUpperCase() + n.slice(1);
+        const nothing = scopeIsEmpty(clearScope, totalAll, current, live[activeVersion]);
+        return (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4" onClick={() => setClearDiagramOpen(false)}>
+            <div
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 border border-zinc-200 animate-in fade-in zoom-in-95 duration-150"
+              onClick={(e) => e.stopPropagation()}
+              data-clear-diagram-dialog
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+                  <Eraser size={20} />
+                </div>
+                <h3 className="font-bold text-lg text-zinc-900">Limpar o diagrama?</h3>
+              </div>
+              <p className="text-sm text-zinc-600 mb-4">
+                Apaga de uma vez todas as etapas, ligações, textos, tempos e setores. O título do diagrama continua.
+              </p>
+              <div className="space-y-2 mb-4">
+                {([
+                  ['todas', 'Todas as versões', `${totalAll} etapas${withContent.length ? ` em ${withContent.map(label).join(', ')}` : ''}`],
+                  ['atual', `Só a versão aberta (${label(activeVersion)})`, `${current} etapas`],
+                ] as const).map(([value, title, detail]) => (
+                  <label
+                    key={value}
+                    className={`flex items-start gap-2.5 p-3 rounded-2xl border cursor-pointer transition-colors ${clearScope === value ? 'border-red-300 bg-red-50/60' : 'border-zinc-200 hover:bg-zinc-50'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="clear-scope"
+                      checked={clearScope === value}
+                      onChange={() => setClearScope(value)}
+                      className="mt-0.5 accent-red-600"
+                      data-clear-scope={value}
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-bold text-zinc-800">{title}</span>
+                      <span className="block text-[11px] text-zinc-500 break-words">{detail}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-500 mb-5">
+                Logo depois de limpar aparece a opção <strong>Desfazer</strong> por alguns segundos. Se quiser guardar uma cópia antes, use Arquivo → Exportar Backup (.json).
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setClearDiagramOpen(false)}
+                  className="px-4 py-2 text-sm font-semibold text-zinc-600 hover:bg-zinc-100 rounded-xl transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => { setClearDiagramOpen(false); clearDiagram(clearScope); }}
+                  disabled={nothing}
+                  className="px-4 py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 rounded-xl shadow transition-colors"
+                  data-confirm-clear-diagram
+                >
+                  {nothing ? 'Já está vazio' : clearScope === 'todas' ? 'Limpar tudo' : 'Limpar esta versão'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Clear AI Confirmation Modal */}
       {showAIClearConfirm && (
