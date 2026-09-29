@@ -8,7 +8,8 @@ import FlowEditor from './components/FlowEditor';
 import { FlowchartHeroAnimation } from './components/FlowchartHeroAnimation';
 import { OptionsMenu } from './components/OptionsMenu';
 import { LandingScreen } from './components/LandingScreen';
-import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode, Lock, Download, Upload } from 'lucide-react';
+import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode, Lock, Download, Upload, Square, SquareCheck, SquareMinus } from 'lucide-react';
+import { planBulkDelete, describeSelection } from './lib/bulkDelete';
 import { motion, AnimatePresence } from 'motion/react';
 import { downloadSystemManual } from './utils/systemManual';
 
@@ -27,6 +28,9 @@ export default function App() {
   const [isNewFolderModalOpen, setIsNewFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'folder' | 'diagram', title: string } | null>(null);
+  // Seleção múltipla na lista (chaves "d:<id>" para fluxos e "f:<id>" para pastas).
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
   const [isSubmittingFolder, setIsSubmittingFolder] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   
@@ -106,31 +110,34 @@ export default function App() {
     setItemToDelete({ id, type: 'diagram', title });
   };
 
+  /**
+   * Exclui fluxos e pastas. O que estava dentro de uma pasta excluída (e não
+   * foi excluído junto) sobe para a pasta de cima que continua existindo.
+   */
+  const applyDelete = (diagramIds: string[], folderIds: string[]) => {
+    const plan = planBulkDelete(getLocalDiagrams(), getLocalFolders(), diagramIds, folderIds);
+    plan.diagramIds.forEach((id) => deleteLocalDiagram(id));
+    plan.folderIds.forEach((id) => deleteLocalFolder(id));
+    const diags = getLocalDiagrams();
+    plan.movedDiagrams.forEach(({ id, folderId }) => {
+      const d = diags.find((x) => x.id === id);
+      if (d) { d.folderId = folderId; saveLocalDiagram(d); }
+    });
+    const folds = getLocalFolders();
+    plan.movedFolders.forEach(({ id, parentId }) => {
+      const f = folds.find((x) => x.id === id);
+      if (f) { f.parentId = parentId; saveLocalFolder(f); }
+    });
+    if (activeDiagramId && plan.diagramIds.includes(activeDiagramId)) setActiveDiagramId(null);
+    if (currentFolderId && plan.folderIds.includes(currentFolderId)) setCurrentFolderId(null);
+    refreshData();
+  };
+
   const handleConfirmDelete = () => {
     if (!itemToDelete) return;
     setIsDeleting(true);
-    if (itemToDelete.type === 'diagram') {
-      deleteLocalDiagram(itemToDelete.id);
-      if (activeDiagramId === itemToDelete.id) setActiveDiagramId(null);
-    } else {
-      deleteLocalFolder(itemToDelete.id);
-      // Move items in this folder to root (simplified logic for local storage)
-      const diags = getLocalDiagrams();
-      diags.forEach(d => {
-        if (d.folderId === itemToDelete.id) {
-          d.folderId = null;
-          saveLocalDiagram(d);
-        }
-      });
-      const folds = getLocalFolders();
-      folds.forEach(f => {
-        if (f.parentId === itemToDelete.id) {
-          f.parentId = null;
-          saveLocalFolder(f);
-        }
-      });
-    }
-    refreshData();
+    if (itemToDelete.type === 'diagram') applyDelete([itemToDelete.id], []);
+    else applyDelete([], [itemToDelete.id]);
     setItemToDelete(null);
     setIsDeleting(false);
   };
@@ -239,6 +246,78 @@ export default function App() {
     };
   }, [diagrams, folders, currentFolderId, searchQuery, filterType, sortBy]);
 
+  // ----- Seleção múltipla -----
+  const visibleKeys = useMemo(
+    () => [
+      ...filteredAndSortedItems.folders.map((f) => `f:${f.id}`),
+      ...filteredAndSortedItems.diagrams.map((d) => `d:${d.id}`),
+    ],
+    [filteredAndSortedItems],
+  );
+  // Só fica selecionado o que está na tela (trocar de pasta, filtro ou busca
+  // não deixa nada "escondido" selecionado para ser excluído sem querer).
+  useEffect(() => {
+    setSelectedKeys((prev) => {
+      if (!prev.size) return prev;
+      const visible = new Set(visibleKeys);
+      const next = new Set([...prev].filter((k) => visible.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleKeys]);
+  const selectionActive = selectedKeys.size > 0;
+  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((k) => selectedKeys.has(k));
+  const toggleSelected = (key: string) =>
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  const toggleSelectAll = () => setSelectedKeys(allVisibleSelected ? new Set() : new Set(visibleKeys));
+  const clearSelection = () => setSelectedKeys(new Set());
+  const selectedDiagramIds = [...selectedKeys].filter((k) => k.startsWith('d:')).map((k) => k.slice(2));
+  const selectedFolderIds = [...selectedKeys].filter((k) => k.startsWith('f:')).map((k) => k.slice(2));
+  const handleConfirmBulkDelete = () => {
+    applyDelete(selectedDiagramIds, selectedFolderIds);
+    clearSelection();
+    setIsBulkDeleteOpen(false);
+  };
+
+  // Esc limpa a seleção; Delete abre a confirmação (fora de campos de texto).
+  useEffect(() => {
+    if (!selectionActive || activeDiagramId) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.key === 'Escape' && !isBulkDeleteOpen) clearSelection();
+      if (e.key === 'Delete' && !isBulkDeleteOpen) setIsBulkDeleteOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectionActive, activeDiagramId, isBulkDeleteOpen]);
+
+  /** Caixinha de seleção de uma linha (não abre o item ao clicar). */
+  const SelectBox = ({ itemKey, label }: { itemKey: string; label: string }) => {
+    const checked = selectedKeys.has(itemKey);
+    return (
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        aria-label={`Selecionar ${label}`}
+        data-select-key={itemKey}
+        onClick={(e) => { e.stopPropagation(); toggleSelected(itemKey); }}
+        className={`-m-1.5 p-1.5 rounded-lg shrink-0 transition-all cursor-pointer ${
+          checked
+            ? 'text-blue-600'
+            : `text-zinc-400 hover:text-blue-600 ${selectionActive ? '' : 'sm:opacity-40 group-hover:opacity-100 focus-visible:opacity-100'}`
+        }`}
+        title={checked ? 'Tirar da seleção' : 'Selecionar'}
+      >
+        {checked ? <SquareCheck size={20} /> : <Square size={20} />}
+      </button>
+    );
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-white">
@@ -305,12 +384,12 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 sm:gap-6 mb-8">
-          <div>
+          <div className="min-w-0 sm:flex-1">
             <h1 className="text-2xl sm:text-3xl font-extrabold text-zinc-900 tracking-tight mb-2">Meus Diagramas</h1>
             <p className="text-xs sm:text-sm text-zinc-500 font-medium">Crie, organize e gerencie seus fluxos temporariamente em seu navegador. Exporte-os para salvar permanentemente.</p>
           </div>
           
-          <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+          <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto sm:shrink-0 whitespace-nowrap">
             <button 
               onClick={() => setIsNewFolderModalOpen(true)}
               className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 bg-white border border-zinc-200 text-zinc-700 hover:text-zinc-900 hover:border-zinc-300 hover:bg-zinc-50 rounded-2xl font-bold text-xs sm:text-sm transition-all shadow-sm"
@@ -408,16 +487,58 @@ export default function App() {
           </div>
         ) : (
           <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden shadow-xs">
+            {/* Seleção múltipla: marcar tudo / quantos / excluir */}
+            <div
+              className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 sm:px-5 py-2.5 border-b border-zinc-100 ${selectionActive ? 'bg-blue-50/70' : 'bg-zinc-50/60'}`}
+              data-selection-bar
+            >
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={allVisibleSelected ? 'true' : selectionActive ? 'mixed' : 'false'}
+                onClick={toggleSelectAll}
+                className={`-m-1.5 p-1.5 rounded-lg shrink-0 cursor-pointer ${selectionActive ? 'text-blue-600' : 'text-zinc-400 hover:text-blue-600'}`}
+                title={allVisibleSelected ? 'Tirar todos da seleção' : 'Selecionar todos'}
+                aria-label="Selecionar todos"
+              >
+                {allVisibleSelected ? <SquareCheck size={20} /> : selectionActive ? <SquareMinus size={20} /> : <Square size={20} />}
+              </button>
+              <span className={`text-xs font-semibold min-w-0 ${selectionActive ? 'text-blue-800' : 'text-zinc-500'}`}>
+                {selectionActive
+                  ? `${describeSelection(selectedDiagramIds.length, selectedFolderIds.length)} selecionado${selectedKeys.size > 1 ? 's' : ''}`
+                  : 'Selecionar vários'}
+              </span>
+              {selectionActive && (
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    className="px-2.5 py-1.5 text-xs font-semibold text-zinc-600 hover:bg-white rounded-lg cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkDeleteOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg cursor-pointer"
+                    data-bulk-delete
+                  >
+                    <Trash2 size={14} /> Excluir ({selectedKeys.size})
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-1 divide-y divide-zinc-100">
               
               {/* Folders */}
               {filteredAndSortedItems.folders.map(folder => (
                 <div 
                   key={folder.id}
-                  onClick={() => setCurrentFolderId(folder.id)}
-                  className="group flex items-center justify-between p-4 sm:p-5 hover:bg-zinc-50 transition-colors cursor-pointer"
+                  onClick={() => (selectionActive ? toggleSelected(`f:${folder.id}`) : setCurrentFolderId(folder.id))}
+                  className={`group flex items-center justify-between gap-2 p-4 sm:p-5 transition-colors cursor-pointer ${selectedKeys.has(`f:${folder.id}`) ? 'bg-blue-50/60 hover:bg-blue-50' : 'hover:bg-zinc-50'}`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
+                    <SelectBox itemKey={`f:${folder.id}`} label={folder.name} />
                     <div className="p-2 sm:p-2.5 bg-blue-50 text-blue-500 rounded-xl group-hover:scale-110 group-hover:bg-blue-100 group-hover:text-blue-600 transition-all">
                       <FolderIcon size={20} className="fill-current opacity-20 absolute" />
                       <FolderIcon size={20} className="relative" />
@@ -429,7 +550,7 @@ export default function App() {
                   <div className="flex items-center gap-6 text-xs text-zinc-400">
                     <button 
                       onClick={(e) => promptDeleteFolder(e, folder.id, folder.name)}
-                      className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                      className={`p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100 ${selectionActive ? 'invisible' : ''}`}
                       title="Excluir Pasta"
                     >
                       <Trash2 size={15} />
@@ -445,10 +566,11 @@ export default function App() {
                 return (
                   <div 
                     key={diag.id}
-                    onClick={() => setActiveDiagramId(diag.id)}
-                    className="group flex items-center justify-between p-4 sm:p-5 hover:bg-zinc-50 transition-colors cursor-pointer"
+                    onClick={() => (selectionActive ? toggleSelected(`d:${diag.id}`) : setActiveDiagramId(diag.id))}
+                    className={`group flex items-center justify-between gap-2 p-4 sm:p-5 transition-colors cursor-pointer ${selectedKeys.has(`d:${diag.id}`) ? 'bg-blue-50/60 hover:bg-blue-50' : 'hover:bg-zinc-50'}`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
+                      <SelectBox itemKey={`d:${diag.id}`} label={diag.title} />
                       <Workflow className="text-blue-600 shrink-0" size={20} />
                       <span className="font-bold text-sm text-zinc-900 truncate group-hover:text-blue-600 transition-colors">
                         {diag.title}
@@ -461,7 +583,7 @@ export default function App() {
                       <span className="hidden sm:inline">Atualizado {new Date(diag.updatedAt).toLocaleDateString()}</span>
                       <button 
                         onClick={(e) => promptDeleteDiagram(e, diag.id, diag.title)}
-                        className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100"
+                        className={`p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100 ${selectionActive ? 'invisible' : ''}`}
                         title="Excluir Fluxograma"
                       >
                         <Trash2 size={15} />
@@ -503,6 +625,58 @@ export default function App() {
                       className="px-4 py-2 font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl"
                     >
                       Excluir
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+
+          {isBulkDeleteOpen && selectionActive && (
+            <div
+              className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+              onClick={() => setIsBulkDeleteOpen(false)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden border border-zinc-200"
+                data-bulk-delete-dialog
+              >
+                <div className="p-6">
+                  <h3 className="text-lg font-bold text-zinc-900 mb-2">Excluir {describeSelection(selectedDiagramIds.length, selectedFolderIds.length)}?</h3>
+                  <ul className="text-sm text-zinc-700 mb-3 max-h-40 overflow-y-auto custom-scrollbar space-y-1">
+                    {[
+                      ...folders.filter((f) => selectedFolderIds.includes(f.id)).map((f) => ({ id: `f:${f.id}`, name: f.name, folder: true })),
+                      ...diagrams.filter((d) => selectedDiagramIds.includes(d.id)).map((d) => ({ id: `d:${d.id}`, name: d.title, folder: false })),
+                    ].map((it) => (
+                      <li key={it.id} className="flex items-center gap-2 min-w-0">
+                        {it.folder ? <FolderIcon size={14} className="text-blue-500 shrink-0" /> : <Workflow size={14} className="text-blue-600 shrink-0" />}
+                        <span className="truncate">{it.name}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {selectedFolderIds.length > 0 && (
+                    <p className="text-xs text-zinc-500 mb-3">
+                      O que estiver dentro das pastas excluídas e não foi selecionado não é apagado: vai para a pasta de cima.
+                    </p>
+                  )}
+                  <p className="text-sm text-zinc-600 mb-6">Esta ação não pode ser desfeita.</p>
+                  <div className="flex justify-end gap-3">
+                    <button
+                      onClick={() => setIsBulkDeleteOpen(false)}
+                      className="px-4 py-2 font-semibold text-zinc-600 hover:bg-zinc-100 rounded-xl"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={handleConfirmBulkDelete}
+                      className="px-4 py-2 font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl"
+                      data-confirm-bulk-delete
+                    >
+                      Excluir {selectedKeys.size}
                     </button>
                   </div>
                 </div>
