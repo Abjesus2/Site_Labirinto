@@ -110,6 +110,8 @@ import { showToast, copyText } from '../lib/embedCompat';
 import { openAISettings } from '../lib/aiSettingsUI';
 import { getActiveSummary } from '../lib/aiProviders';
 import { ImportFlowModal } from './ImportFlowModal';
+import { ImportVersionsModal } from './ImportVersionsModal';
+import { readImportFile, applyImport, ImportFile, ImportMode, ImportSource } from '../lib/importVersions';
 import {
   buildClip,
   collectSelection,
@@ -598,43 +600,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         if (!content) return;
 
         if (file.name.endsWith('.json')) {
-          const parsed = JSON.parse(content);
-          let importedNodes: Node[] = [];
-          let importedEdges: Edge[] = [];
-          let importedVersions = versions;
-          let importedTitle = title;
-
-          if (parsed.versions) {
-            importedVersions = parsed.versions;
-            setVersions(importedVersions);
-            const activeV = parsed.activeVersion || activeVersion || 'normal';
-            setActiveVersion(activeV);
-            if (parsed.versions[activeV]) {
-              importedNodes = parsed.versions[activeV].nodes || [];
-              importedEdges = parsed.versions[activeV].edges || [];
-            }
-          } else if (Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
-            importedNodes = parsed.nodes;
-            importedEdges = parsed.edges;
-          } else if (Array.isArray(parsed)) {
-            importedNodes = parsed;
-          }
-
-          if (parsed.title) {
-            importedTitle = parsed.title;
-            setTitle(importedTitle);
-          }
-
-          if (importedNodes.length > 0) {
-            setNodes(importedNodes);
-            setEdges(importedEdges);
-            pushHistory(importedNodes, importedEdges, 'Importou arquivo JSON');
-            saveToCloud(activeVersion, importedNodes, importedEdges, importedVersions);
-            setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 100);
-            alert('Fluxograma e dados importados com sucesso!');
-          } else {
-            alert('O arquivo JSON não contém elementos de fluxograma válidos.');
-          }
+          // Escolha das versões (e substituir/acrescentar) fica no modal.
+          const read = readImportFile(JSON.parse(content), activeVersion);
+          if (read) setImportFile(read);
+          else alert('O arquivo JSON não contém elementos de fluxograma válidos.');
         } else {
           alert('Arquivo selecionado. Para restauração total de diagramas, recomendamos utilizar arquivos .json exportados pelo Labirinto.');
         }
@@ -645,6 +614,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     };
     reader.readAsText(file);
   };
+  // Arquivo .json lido, esperando a escolha das versões no modal.
+  const [importFile, setImportFile] = useState<ImportFile | null>(null);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
   const [showAIModal, setShowAIModal] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -2280,6 +2251,50 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   /* ---------------------------------------------------------------- */
 
   /** Junta (ou substitui) o fluxo recebido, sempre com IDs novos. */
+  /** Versões deste diagrama com o que está na tela agora (a versão aberta vive em nodes/edges). */
+  const liveVersions = useCallback(
+    () => ({ ...versions, [activeVersion]: { ...(versions[activeVersion] || {}), nodes, edges } }),
+    [versions, activeVersion, nodes, edges],
+  );
+
+  const applyImportChoices = useCallback(
+    (choices: { source: ImportSource; mode: ImportMode }[]) => {
+      const file = importFile;
+      setImportFile(null);
+      if (!choices.length) return;
+      const before = liveVersions();
+      const wasEmpty = Object.values(before).every((v: any) => !(v?.nodes?.length));
+      const next = applyImport(before, choices) as typeof versions;
+      // Mostra o resultado: fica na versão aberta se ela recebeu algo; senão
+      // abre a primeira versão importada.
+      const targets = choices.map((c) => c.source.target);
+      const showVersion = targets.includes(activeVersion) ? activeVersion : targets[0];
+      if (showVersion !== activeVersion && next[activeVersion]) {
+        next[activeVersion] = { ...next[activeVersion], viewport: getViewport() };
+      }
+      const shown = next[showVersion] || { nodes: [], edges: [] };
+      setVersions(next);
+      setActiveVersion(showVersion);
+      setNodes(shown.nodes as Node[]);
+      setEdges(shown.edges as Edge[]);
+      if (wasEmpty && file?.title) setTitle(file.title);
+      pushHistory(shown.nodes as Node[], shown.edges as Edge[], 'Importou arquivo JSON');
+      saveToCloud(showVersion, shown.nodes as Node[], shown.edges as Edge[], next);
+      if (wasEmpty && file?.title) {
+        const data = getLocalDiagram(diagramId);
+        if (data) { data.title = file.title; data.updatedAt = Date.now(); saveLocalDiagram(data); }
+      }
+      setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 100);
+      const label = (n: string) => n.charAt(0).toUpperCase() + n.slice(1);
+      const parts = choices.map((c) => {
+        const had = (before[c.source.target]?.nodes?.length || 0) > 0;
+        return `${label(c.source.target)}${had ? (c.mode === 'substituir' ? ' (substituída)' : ' (acrescentada)') : ''}`;
+      });
+      showToast({ message: `Importado: ${parts.join(', ')}.`, timeout: 8000 });
+    },
+    [importFile, liveVersions, activeVersion, getViewport, pushHistory, saveToCloud, diagramId, fitView, setNodes, setEdges],
+  );
+
   const applyIncomingFlow = useCallback(
     (clip: FlowClip, mode: 'adicionar' | 'substituir') => {
       if (!clip || !Array.isArray(clip.nodes) || clip.nodes.length === 0) {
@@ -4780,6 +4795,13 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
         diagramTitle={title}
         jsonText={JSON.stringify({ title, versions }, null, 2)}
         onDownloadJson={exportJson}
+      />
+
+      <ImportVersionsModal
+        file={importFile}
+        existingCounts={Object.fromEntries(Object.entries(liveVersions()).map(([k, v]: any) => [k, v?.nodes?.length || 0]))}
+        onClose={() => setImportFile(null)}
+        onConfirm={applyImportChoices}
       />
 
       <ImportFlowModal

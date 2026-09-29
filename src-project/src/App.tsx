@@ -8,7 +8,8 @@ import FlowEditor from './components/FlowEditor';
 import { FlowchartHeroAnimation } from './components/FlowchartHeroAnimation';
 import { OptionsMenu } from './components/OptionsMenu';
 import { LandingScreen } from './components/LandingScreen';
-import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode, Lock, Download, Upload, Square, SquareCheck, SquareMinus } from 'lucide-react';
+import { Plus, Folder as FolderIcon, LayoutDashboard, Search, ChevronRight, X, Trash2, FolderPlus, Workflow, ArrowLeft, MoreVertical, SearchCode, Lock, Download, Upload, Square, SquareCheck, SquareMinus, FolderInput, House } from 'lucide-react';
+import { planMove, invalidMoveTargets, folderTree } from './lib/moveItems';
 import { planBulkDelete, describeSelection } from './lib/bulkDelete';
 import { motion, AnimatePresence } from 'motion/react';
 import { downloadSystemManual } from './utils/systemManual';
@@ -31,6 +32,9 @@ export default function App() {
   // Seleção múltipla na lista (chaves "d:<id>" para fluxos e "f:<id>" para pastas).
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
   const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+  // Mover fluxos/pastas: o que vai ser movido e o destino escolhido no modal.
+  const [moveRequest, setMoveRequest] = useState<{ diagramIds: string[]; folderIds: string[]; fromSelection: boolean } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<string | null | undefined>(undefined);
   const [isSubmittingFolder, setIsSubmittingFolder] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   
@@ -276,6 +280,49 @@ export default function App() {
   const clearSelection = () => setSelectedKeys(new Set());
   const selectedDiagramIds = [...selectedKeys].filter((k) => k.startsWith('d:')).map((k) => k.slice(2));
   const selectedFolderIds = [...selectedKeys].filter((k) => k.startsWith('f:')).map((k) => k.slice(2));
+  const openMove = (diagramIds: string[], folderIds: string[], fromSelection: boolean) => {
+    setMoveTarget(undefined);
+    setMoveRequest({ diagramIds, folderIds, fromSelection });
+  };
+  const handleConfirmMove = () => {
+    if (!moveRequest || moveTarget === undefined) return;
+    const plan = planMove(getLocalDiagrams(), getLocalFolders(), moveRequest.diagramIds, moveRequest.folderIds, moveTarget);
+    if (!plan) {
+      showToast({ message: 'Não dá para mover uma pasta para dentro dela mesma.', tone: 'warn' });
+      return;
+    }
+    const diags = getLocalDiagrams();
+    plan.diagrams.forEach(({ id, folderId }) => {
+      const d = diags.find((x) => x.id === id);
+      if (d) { d.folderId = folderId; saveLocalDiagram(d); }
+    });
+    const folds = getLocalFolders();
+    plan.folders.forEach(({ id, parentId }) => {
+      const f = folds.find((x) => x.id === id);
+      if (f) { f.parentId = parentId; f.updatedAt = Date.now(); saveLocalFolder(f); }
+    });
+    const destName = moveTarget ? folders.find((f) => f.id === moveTarget)?.name || 'pasta' : 'Início';
+    const total = moveRequest.diagramIds.length + moveRequest.folderIds.length;
+    showToast({ message: `${total === 1 ? 'Item movido' : `${total} itens movidos`} para "${destName}".`, timeout: 5000 });
+    if (moveRequest.fromSelection) clearSelection();
+    setMoveRequest(null);
+    refreshData();
+  };
+  const moveInvalid = useMemo(
+    () => (moveRequest ? invalidMoveTargets(folders, moveRequest.folderIds) : new Set<string>()),
+    [moveRequest, folders],
+  );
+  const moveTreeItems = useMemo(() => (moveRequest ? folderTree(folders) : []), [moveRequest, folders]);
+  // Onde os itens estão hoje (se todos estiverem no mesmo lugar): destino sem efeito.
+  const moveCurrentPlace = useMemo(() => {
+    if (!moveRequest) return undefined;
+    const places = new Set<string | null>([
+      ...moveRequest.diagramIds.map((id) => diagrams.find((d) => d.id === id)?.folderId ?? null),
+      ...moveRequest.folderIds.map((id) => folders.find((f) => f.id === id)?.parentId ?? null),
+    ]);
+    return places.size === 1 ? [...places][0] : undefined;
+  }, [moveRequest, diagrams, folders]);
+
   const handleConfirmBulkDelete = () => {
     applyDelete(selectedDiagramIds, selectedFolderIds);
     clearSelection();
@@ -288,12 +335,13 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (e.key === 'Escape' && !isBulkDeleteOpen) clearSelection();
-      if (e.key === 'Delete' && !isBulkDeleteOpen) setIsBulkDeleteOpen(true);
+      if (isBulkDeleteOpen || moveRequest) return;
+      if (e.key === 'Escape') clearSelection();
+      if (e.key === 'Delete') setIsBulkDeleteOpen(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectionActive, activeDiagramId, isBulkDeleteOpen]);
+  }, [selectionActive, activeDiagramId, isBulkDeleteOpen, moveRequest]);
 
   /** Caixinha de seleção de uma linha (não abre o item ao clicar). */
   const SelectBox = ({ itemKey, label }: { itemKey: string; label: string }) => {
@@ -519,6 +567,14 @@ export default function App() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => openMove(selectedDiagramIds, selectedFolderIds, true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-blue-700 bg-white border border-blue-200 hover:bg-blue-50 rounded-lg cursor-pointer"
+                    data-bulk-move
+                  >
+                    <FolderInput size={14} /> Mover ({selectedKeys.size})
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setIsBulkDeleteOpen(true)}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg cursor-pointer"
                     data-bulk-delete
@@ -547,7 +603,15 @@ export default function App() {
                       {folder.name}
                     </span>
                   </div>
-                  <div className="flex items-center gap-6 text-xs text-zinc-400">
+                  <div className="flex items-center gap-1 sm:gap-3 text-xs text-zinc-400 shrink-0">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openMove([], [folder.id], false); }}
+                      className={`p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100 ${selectionActive ? 'invisible' : ''}`}
+                      title="Mover pasta (com tudo o que está dentro)"
+                      data-move-item={`f:${folder.id}`}
+                    >
+                      <FolderInput size={15} />
+                    </button>
                     <button 
                       onClick={(e) => promptDeleteFolder(e, folder.id, folder.name)}
                       className={`p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100 ${selectionActive ? 'invisible' : ''}`}
@@ -579,8 +643,16 @@ export default function App() {
                         {nodeCount} etapas
                       </span>
                     </div>
-                    <div className="flex items-center gap-4 sm:gap-6 text-xs text-zinc-400">
-                      <span className="hidden sm:inline">Atualizado {new Date(diag.updatedAt).toLocaleDateString()}</span>
+                    <div className="flex items-center gap-1 sm:gap-3 text-xs text-zinc-400 shrink-0">
+                      <span className="hidden sm:inline sm:mr-2">Atualizado {new Date(diag.updatedAt).toLocaleDateString()}</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openMove([diag.id], [], false); }}
+                        className={`p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100 ${selectionActive ? 'invisible' : ''}`}
+                        title="Mover para outra pasta"
+                        data-move-item={`d:${diag.id}`}
+                      >
+                        <FolderInput size={15} />
+                      </button>
                       <button 
                         onClick={(e) => promptDeleteDiagram(e, diag.id, diag.title)}
                         className={`p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100 ${selectionActive ? 'invisible' : ''}`}
@@ -627,6 +699,75 @@ export default function App() {
                       Excluir
                     </button>
                   </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+
+          {moveRequest && (
+            <div
+              className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4"
+              onClick={() => setMoveRequest(null)}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col overflow-hidden border border-zinc-200"
+                data-move-dialog
+              >
+                <div className="px-6 pt-5 pb-3 border-b border-zinc-100">
+                  <h3 className="text-lg font-bold text-zinc-900">
+                    Mover {moveRequest.diagramIds.length + moveRequest.folderIds.length === 1
+                      ? `"${moveRequest.folderIds.length ? folders.find((f) => f.id === moveRequest.folderIds[0])?.name : diagrams.find((d) => d.id === moveRequest.diagramIds[0])?.title}"`
+                      : describeSelection(moveRequest.diagramIds.length, moveRequest.folderIds.length)}
+                  </h3>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    Escolha o destino.{moveRequest.folderIds.length > 0 && ' A pasta vai com tudo o que está dentro dela.'}
+                  </p>
+                </div>
+                <div className="px-3 py-3 overflow-y-auto custom-scrollbar flex-1 space-y-0.5">
+                  {[{ id: null as string | null, name: 'Início', depth: 0 }, ...moveTreeItems.map(({ folder, depth }: { folder: Folder; depth: number }) => ({ id: folder.id as string | null, name: folder.name, depth: depth + 1 }))].map((opt) => {
+                    const blocked = opt.id !== null && moveInvalid.has(opt.id);
+                    const here = moveCurrentPlace !== undefined && moveCurrentPlace === opt.id;
+                    const chosen = moveTarget === opt.id;
+                    return (
+                      <button
+                        key={opt.id ?? '__root'}
+                        type="button"
+                        disabled={blocked || here}
+                        onClick={() => setMoveTarget(opt.id)}
+                        style={{ paddingLeft: 12 + opt.depth * 18 }}
+                        className={`w-full pr-3 py-2.5 rounded-xl flex items-center gap-2 text-left text-sm transition-colors ${
+                          chosen ? 'bg-blue-600 text-white' : blocked || here ? 'text-zinc-400 cursor-not-allowed' : 'text-zinc-800 hover:bg-zinc-100 cursor-pointer'
+                        }`}
+                        data-move-target={opt.id ?? 'root'}
+                      >
+                        {opt.id === null ? <House size={16} className="shrink-0" /> : <FolderIcon size={16} className="shrink-0" />}
+                        <span className="truncate font-semibold">{opt.name}</span>
+                        {(blocked || here) && (
+                          <span className="ml-auto text-[10px] font-medium shrink-0">{blocked ? 'sendo movida' : 'está aqui'}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="px-6 py-4 border-t border-zinc-100 flex justify-end gap-3">
+                  <button
+                    onClick={() => setMoveRequest(null)}
+                    className="px-4 py-2 font-semibold text-zinc-600 hover:bg-zinc-100 rounded-xl"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleConfirmMove}
+                    disabled={moveTarget === undefined}
+                    className="px-4 py-2 font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 rounded-xl"
+                    data-confirm-move
+                  >
+                    Mover aqui
+                  </button>
                 </div>
               </motion.div>
             </div>
