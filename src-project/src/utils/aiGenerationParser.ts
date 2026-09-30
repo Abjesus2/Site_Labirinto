@@ -69,6 +69,9 @@ export function applyGeneratedJsonlLine(
       position: { x: 0, y: 0 },
       data: {
         label: data.node.label,
+        // Nome do processo quando a IA tem certeza de que a fonte descreve
+        // processos diferentes (ver utils/processSplit). Vazio = um processo só.
+        process: typeof data.node.process === 'string' ? data.node.process.trim() : '',
         timing: {
           duration: nodeDuration,
           setupTime: Number(data.node.setupTime) || 0,

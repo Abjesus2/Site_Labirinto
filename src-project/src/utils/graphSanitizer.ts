@@ -6,6 +6,22 @@ export interface ConnectivityResult {
   dubiousCount: number;
 }
 
+/** Linha vermelha de validação ("Analise Conexão") entre duas formas. */
+export function buildDubiousEdge(sourceId: string, targetId: string, label = 'Analise Conexão'): Edge {
+  return {
+    id: `e_dubious_${sourceId}_${targetId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    source: sourceId,
+    target: targetId,
+    sourceHandle: 'bottom',
+    targetHandle: 'top',
+    label,
+    type: 'smoothstep',
+    markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
+    style: { stroke: '#ef4444', strokeWidth: 3 },
+    data: { isDubious: true },
+  };
+}
+
 export function ensureConnectedGraph(inputNodes: Node[], inputEdges: Edge[]): ConnectivityResult {
   if (!inputNodes || inputNodes.length === 0) {
     return { nodes: [], edges: [], dubiousCount: 0 };
@@ -85,8 +101,10 @@ export function ensureConnectedGraph(inputNodes: Node[], inputEdges: Edge[]): Co
   });
 
   // 2. Check all intermediate & start nodes: must have at least 1 outgoing edge (except endNode)
+  // Um "fim" nunca precisa de saída — antes o segundo fim de um fluxo
+  // ganhava uma linha vermelha apontando para o primeiro fim.
   nodes.forEach((node, idx) => {
-    if (node.id === endNode.id || node.type === 'junction') return;
+    if (node.id === endNode.id || node.type === 'junction' || node.type === 'end') return;
 
     const out = outgoingMap.get(node.id) || [];
     if (out.length === 0) {

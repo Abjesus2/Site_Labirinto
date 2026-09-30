@@ -3,12 +3,15 @@
  * ----------------------------------------
  * Um arquivo .json do app pode ter várias versões (simples, normal,
  * detalhado...). A pessoa escolhe quais trazer (uma, várias ou todas); cada
- * uma vai para a versão de MESMO NOME deste diagrama. Se essa versão já tem
+ * uma vai para a versão de MESMO NOME deste diagrama (as versões são fixas:
+ * simples, normal e detalhado — um nome antigo como "normal (v2)" vai para
+ * a versão fixa correspondente). Se essa versão já tem
  * conteúdo, a pessoa decide: substituir o que existe ou acrescentar ao lado.
  *
  * Contas puras (sem React), testáveis isoladas.
  */
 import { buildClip, prepareForPaste } from './flowClipboard';
+import { isFixedVersion, guessTargetVersion } from './fixedVersions';
 
 export interface ImportSource {
   /** Nome da versão no arquivo. */
@@ -39,7 +42,7 @@ export function readImportFile(parsed: any, activeVersion: string): ImportFile |
   if (parsed.versions && typeof parsed.versions === 'object' && !Array.isArray(parsed.versions)) {
     const sources = Object.entries(parsed.versions as Record<string, any>)
       .filter(([, v]) => v && Array.isArray(v.nodes) && v.nodes.length > 0)
-      .map(([name, v]) => ({ name, target: name, nodes: v.nodes, edges: Array.isArray(v.edges) ? v.edges : [] }));
+      .map(([name, v]) => ({ name, target: isFixedVersion(name) ? name : guessTargetVersion(name), nodes: v.nodes, edges: Array.isArray(v.edges) ? v.edges : [] }));
     return sources.length ? { title, sources } : null;
   }
   if (Array.isArray(parsed.nodes) && parsed.nodes.length) {

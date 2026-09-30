@@ -155,8 +155,14 @@ export const buildPrompt = (body: any): string => {
         - EVERY node except "start" MUST have at least 1 incoming edge.
         - EVERY node except "end" MUST have at least 1 outgoing edge.
         - NEVER leave orphaned nodes. All labels MUST be in Portuguese (PT-BR).
-        - Cada versão é UM SÓ fluxo conectado do "start" até o(s) "end": nada de blocos soltos ("ilhas") sem ligação com o resto. A única exceção é quando o texto deixa EXPLÍCITO que são processos totalmente distintos e independentes.
+        - Cada versão é UM SÓ fluxo conectado do "start" até o(s) "end": nada de blocos soltos ("ilhas") sem ligação com o resto. A única exceção é quando o texto deixa EXPLÍCITO que são processos totalmente distintos e independentes (veja 5.1).
         - Só se você realmente não conseguir saber, pela fonte, onde um bloco se liga ao outro, crie a aresta com sua melhor estimativa e acrescente "isDubious": true nela (o app pinta de vermelho para o usuário validar). Isso é raro: se o texto descreve a sequência, a ligação é certa e NÃO leva "isDubious". Num processo bem descrito o esperado é nenhuma aresta com "isDubious".
+
+        5.1. MAIS DE UM PROCESSO NA MESMA FONTE — SÓ COM CERTEZA ABSOLUTA:
+        - Normalmente tudo é UM processo só: deixe o campo "process" de fora (ou vazio) em todos os nós.
+        - Preencha "process" (nome curto do processo, ex.: "Recebimento", "Expedição") em TODOS os nós de uma versão SOMENTE quando a fonte deixar ABSOLUTAMENTE claro que são processos diferentes e independentes: cada um com o seu próprio início ("start") e o seu próprio fim ("end") e NENHUMA passagem de um para o outro. Nesse caso NÃO crie arestas entre processos diferentes — o app desenha cada processo separado, um ao lado do outro.
+        - Se houver QUALQUER dúvida (um processo entrega algo para o outro, um depende do resultado do outro, ou a fonte não diz), é UM processo só: não use "process" e ligue os blocos; onde você não souber exatamente a ligação, use a aresta com "isDubious": true para o usuário validar.
+        - Exemplo com certeza: {"version": "normal", "node": {"id": "r1", "label": "Início do Recebimento", "type": "start", "duration": 0, "process": "Recebimento"}}
 
         6. LABELS (CRITICAL):
         - Labels devem ser DESCRITIVOS, COMPLETOS e PROFISSIONAIS, entre 20 e 70 caracteres.

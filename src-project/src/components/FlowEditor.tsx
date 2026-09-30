@@ -79,7 +79,6 @@ import {
   ChevronUp,
   ArrowUpToLine,
   ArrowDownToLine,
-  CopyPlus,
   GitBranch,
   RotateCcw,
   PlusCircle,
@@ -113,6 +112,7 @@ import { getActiveSummary } from '../lib/aiProviders';
 import { ImportFlowModal } from './ImportFlowModal';
 import { ImportVersionsModal } from './ImportVersionsModal';
 import { readImportFile, applyImport, ImportFile, ImportMode, ImportSource } from '../lib/importVersions';
+import { FIXED_VERSIONS, isFixedVersion, guessTargetVersion, normalizeVersions } from '../lib/fixedVersions';
 import {
   buildClip,
   collectSelection,
@@ -130,7 +130,8 @@ import { calculateCumulativeTimes, exportTableToCSV, TimeSettings, defaultTimeSe
 import { deleteSelectionSafely, getActualEdgeEndpoint, getPositionFromHandleId, generateDefaultStepRoute } from '../utils/snapUtils';
 import { getObstacles, routeOrthogonalAuto, getManhattanNormal, validateRouteAgainstObstacles } from '../utils/orthogonalRouter';
 import { getShapeConnectionPoint } from '../utils/shapeGeometry';
-import { ensureConnectedGraph } from '../utils/graphSanitizer';
+import { ensureConnectedGraph, buildDubiousEdge } from '../utils/graphSanitizer';
+import { splitIndependentProcesses, placeSideBySide } from '../utils/processSplit';
 import { computeAlignmentSnap, GuideLine, GuideRect } from '../utils/alignmentGuides';
 import { computePageCuts, singleImageScale, choosePdfLayout, MIN_READABLE_SCALE, PDF_MARGINS, CANVAS_MAX_SIDE, Span } from '../utils/exportPaging';
 import { createPngStitcher, canStitchPng, stitchedScale } from '../utils/pngStitch';
@@ -696,8 +697,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
   // AI Conflict Dialog State (Substituir vs Criar Nova Versão mantendo a antiga)
   const [showAIConflictModal, setShowAIConflictModal] = useState<boolean>(false);
-  const [aiConflictChoice, setAiConflictChoice] = useState<'new_version' | 'replace' | 'append'>('new_version');
-  const [newVersionCustomName, setNewVersionCustomName] = useState<string>('');
+  // As versões são fixas (simples, normal, detalhado): a geração com conteúdo
+  // existente só substitui ou acrescenta — nunca cria "(v2)" extras.
+  const [aiConflictChoice, setAiConflictChoice] = useState<'replace' | 'append'>('append');
 
   // Gerar Manualmente com Outra IA: mostra o prompt pronto para copiar em
   // qualquer chat de IA (sem precisar cadastrar chave aqui) e lê de volta o
@@ -713,14 +715,16 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     normal: { nodes: [], edges: [] }
   });
 
-  // Dynamic available versions list
-  const availableVersions = useMemo(() => {
-    // As três versões padrão ficam sempre visíveis, mesmo vazias: antes só
-    // apareciam depois que a IA as criava, e o usuário não tinha como trocar.
-    const defaultList = ['simples', 'normal', 'detalhado'];
-    const allKeys = Object.keys(versions);
-    return Array.from(new Set([...defaultList, ...allKeys.filter(k => !defaultList.includes(k))]));
-  }, [versions]);
+  // Versões fixas: sempre as três (simples, normal, detalhado), nunca mais.
+  const availableVersions: string[] = FIXED_VERSIONS as unknown as string[];
+  // Versões antigas fora das três que ainda guardam conteúdo (ex.: "Normal
+  // (v2)") — ficam num aviso para o usuário aproveitar ou excluir.
+  const extraVersions = useMemo(
+    () => Object.keys(versions).filter((k) => !isFixedVersion(k) && ((versions[k]?.nodes?.length || 0) + (versions[k]?.edges?.length || 0)) > 0),
+    [versions],
+  );
+  const [showExtraVersions, setShowExtraVersions] = useState(false);
+  const [extraTargets, setExtraTargets] = useState<Record<string, string>>({});
 
   // Sem nuvem: o compartilhamento é feito pelo arquivo .json
   const [showShareModal, setShowShareModal] = useState(false);
@@ -758,7 +762,20 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           nodes: normalizeContainerZIndex(rawVersions[v].nodes || []),
         };
       });
-      const activeV = data.activeVersion || 'normal';
+      // Só as três versões fixas viram abas; as extras vão para a versão
+      // fixa correspondente quando ela está vazia, ou ficam no aviso.
+      const norm = normalizeVersions(loadedVersions);
+      Object.keys(loadedVersions).forEach((k) => { if (!(k in norm.versions)) delete loadedVersions[k]; });
+      Object.assign(loadedVersions, norm.versions);
+      const savedActive = data.activeVersion || 'normal';
+      const activeV = isFixedVersion(savedActive)
+        ? savedActive
+        : norm.moved.find((m) => m.from === savedActive)?.to || guessTargetVersion(savedActive);
+      if (norm.moved.length || norm.droppedEmpty.length || activeV !== savedActive) {
+        data.versions = loadedVersions;
+        data.activeVersion = activeV;
+        saveLocalDiagram(data);
+      }
 
       setVersions(loadedVersions);
       setActiveVersion(activeV);
@@ -2265,6 +2282,38 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     [versions, activeVersion, nodes, edges],
   );
 
+  /** Versão extra antiga: substituir/acrescentar numa versão fixa, ou excluir. */
+  const resolveExtraVersion = useCallback(
+    (name: string, action: 'substituir' | 'acrescentar' | 'excluir') => {
+      const current = liveVersions();
+      const extra = current[name];
+      if (!extra) return;
+      const target = extraTargets[name] || guessTargetVersion(name);
+      let next: typeof versions = { ...current };
+      if (action !== 'excluir') {
+        next = applyImport(current, [{ source: { name, target, nodes: extra.nodes || [], edges: extra.edges || [] }, mode: action }]) as typeof versions;
+      }
+      delete next[name];
+      const shown = next[activeVersion] || { nodes: [], edges: [] };
+      setVersions(next);
+      if (action !== 'excluir' && target === activeVersion) {
+        setNodes(shown.nodes as Node[]);
+        setEdges(shown.edges as Edge[]);
+        pushHistory(shown.nodes as Node[], shown.edges as Edge[], `Versão "${name}" ${action === 'substituir' ? 'substituiu' : 'acrescentada em'} ${target}`);
+        setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 80);
+      }
+      saveToCloud(activeVersion, shown.nodes as Node[], shown.edges as Edge[], next);
+      const label = (n: string) => n.charAt(0).toUpperCase() + n.slice(1);
+      showToast({
+        message: action === 'excluir'
+          ? `Versão "${name}" excluída.`
+          : `Versão "${name}" ${action === 'substituir' ? `substituiu a versão ${label(target)}` : `acrescentada na versão ${label(target)}`}.`,
+        timeout: 6000,
+      });
+    },
+    [liveVersions, extraTargets, activeVersion, pushHistory, saveToCloud, fitView, setNodes, setEdges],
+  );
+
   const applyImportChoices = useCallback(
     (choices: { source: ImportSource; mode: ImportMode }[]) => {
       const file = importFile;
@@ -2827,16 +2876,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     const canvasHasContent = nodes.length > 0;
 
     if (versionsWithContent.length > 0 || canvasHasContent) {
-      // Sugerir automaticamente um nome limpo e exclusivo para a nova versão
-      const baseName = selectedComplexities.length === 1 ? selectedComplexities[0] : activeVersion;
-      let counter = 2;
-      let candidate = `${baseName} (v${counter})`;
-      while (versions[candidate] || versions[`${baseName}_v${counter}`]) {
-        counter++;
-        candidate = `${baseName} (v${counter})`;
-      }
-      setNewVersionCustomName(candidate);
-      setAiConflictChoice('new_version');
+      setAiConflictChoice('append');
       setShowAIConflictModal(true);
       return;
     }
@@ -2888,15 +2928,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     const canvasHasContent = nodes.length > 0;
 
     if (versionsWithContent.length > 0 || canvasHasContent) {
-      const baseName = selectedComplexities.length === 1 ? selectedComplexities[0] : activeVersion;
-      let counter = 2;
-      let candidate = `${baseName} (v${counter})`;
-      while (versions[candidate] || versions[`${baseName}_v${counter}`]) {
-        counter++;
-        candidate = `${baseName} (v${counter})`;
-      }
-      setNewVersionCustomName(candidate);
-      setAiConflictChoice('new_version');
+      setAiConflictChoice('append');
       pendingManualPasteRef.current = true;
       setShowManualAIModal(false);
       setShowAIConflictModal(true);
@@ -2906,11 +2938,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     executeManualPasteImport({ mode: 'replace' });
   };
 
-  const executeManualPasteImport = (options: {
-    mode: 'replace' | 'new_version' | 'append';
-    newVersionName?: string;
-  }) => {
-    const { mode, newVersionName } = options;
+  const executeManualPasteImport = (options: { mode: 'replace' | 'append' }) => {
+    const { mode } = options;
     const { rawGenerated, nodeCount } = parseGeneratedBlock(
       manualPasteText,
       selectedComplexities,
@@ -2931,7 +2960,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     setShowAIConflictModal(false);
     setShowManualAIModal(false);
-    finalizeGeneratedContent(rawGenerated, mode, newVersionName);
+    finalizeGeneratedContent(rawGenerated, mode);
     setManualPasteText('');
     showToast({ message: 'Fluxograma gerado a partir do texto colado.', timeout: 6000 });
   };
@@ -2944,8 +2973,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // streaming — as duas vias precisam terminar exatamente da mesma forma.
   const finalizeGeneratedContent = (
     rawGenerated: Record<string, { nodes: Node[]; edges: Edge[] }>,
-    mode: 'replace' | 'new_version' | 'append',
-    newVersionName?: string,
+    mode: 'replace' | 'append',
   ) => {
     const promptLower = prompt.toLowerCase();
     const hasTimingPrompt = /tempo|minuto|hora|dia|duração|duracao|setup|espera|lead time|pausa|prazo/.test(promptLower);
@@ -2955,32 +2983,58 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     const versionsSemLigacao: string[] = [];
 
+    const versionsSeparadas: string[] = [];
+    // Tamanho de cada forma para pôr os processos lado a lado sem encostar.
+    const sizeOf = (n: Node) => {
+      const dim = getNodeDimensions(n.type);
+      return {
+        w: Number((n.style as any)?.width) || (n.width as number) || dim.width,
+        h: Number((n.style as any)?.height) || (n.height as number) || dim.height,
+      };
+    };
+
     Object.keys(rawGenerated).forEach(v => {
       const repaired = repairGeneratedVersion(rawGenerated[v]);
       if (repaired.report.missingEdges) versionsSemLigacao.push(v);
-      const connected = ensureConnectedGraph(
-        repaired.nodes as Node[],
-        repaired.edges as Edge[]
-      );
-      const sanitized = {
-        ...connected,
-        edges: fixDecisionExits(connected.nodes, connected.edges) as Edge[],
-      };
 
-      if (sanitized.nodes.some(n => {
-        const t = (n.data as any)?.timing;
-        return (t?.duration || 0) > 0 || (t?.setupTime || 0) > 0;
-      })) {
-        anyTimingGenerated = true;
-      }
+      // Processos diferentes só ficam separados (lado a lado) com certeza;
+      // na dúvida é um processo só e os blocos soltos ganham a linha
+      // vermelha de validação.
+      const split = splitIndependentProcesses(repaired.nodes as Node[], repaired.edges as Edge[]);
+      if (split.certain) versionsSeparadas.push(`${v} (${split.groups.map((g) => g.name).join(', ')})`);
 
-      const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
-        sanitized.nodes,
-        sanitized.edges
-      );
-      const nodesWithSectors = buildSectorContainers(lNodes, 'TB');
-      layoutedGenerated[v] = { nodes: nodesWithSectors, edges: lEdges };
+      const blocks = split.groups.map((group) => {
+        const connected = ensureConnectedGraph(group.nodes as Node[], group.edges as Edge[]);
+        const sanitized = {
+          ...connected,
+          edges: fixDecisionExits(connected.nodes, connected.edges) as Edge[],
+        };
+
+        if (sanitized.nodes.some(n => {
+          const t = (n.data as any)?.timing;
+          return (t?.duration || 0) > 0 || (t?.setupTime || 0) > 0;
+        })) {
+          anyTimingGenerated = true;
+        }
+
+        const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
+          sanitized.nodes,
+          sanitized.edges
+        );
+        return { nodes: buildSectorContainers(lNodes, 'TB') as Node[], edges: lEdges as Edge[] };
+      });
+
+      layoutedGenerated[v] = blocks.length === 1
+        ? blocks[0]
+        : { nodes: placeSideBySide(blocks.map((b) => b.nodes), sizeOf, 240), edges: blocks.flatMap((b) => b.edges) };
     });
+
+    if (versionsSeparadas.length > 0) {
+      showToast({
+        message: `Processos diferentes desenhados lado a lado: ${versionsSeparadas.join('; ')}.`,
+        timeout: 9000,
+      });
+    }
 
     if (versionsSemLigacao.length > 0) {
       // Quase sempre é a resposta da IA cortada por tamanho: ela escreveu as
@@ -3011,27 +3065,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     let newActiveVersionKey = activeVersion;
 
-    if (mode === 'new_version') {
-      const cleanName = (newVersionName || '').trim() || `${activeVersion} (v2)`;
-      if (selectedComplexities.length === 1) {
-        const comp = selectedComplexities[0];
-        updatedVersions[cleanName] = {
-          nodes: layoutedGenerated[comp]?.nodes || [],
-          edges: layoutedGenerated[comp]?.edges || []
-        };
-        newActiveVersionKey = cleanName;
-      } else {
-        selectedComplexities.forEach(c => {
-          const vKey = `${cleanName} - ${c}`;
-          updatedVersions[vKey] = {
-            nodes: layoutedGenerated[c]?.nodes || [],
-            edges: layoutedGenerated[c]?.edges || []
-          };
-        });
-        const primeComp = selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0];
-        newActiveVersionKey = `${cleanName} - ${primeComp}`;
-      }
-    } else if (mode === 'append') {
+    if (mode === 'append') {
       selectedComplexities.forEach(c => {
         const prevN = updatedVersions[c]?.nodes || [];
         const prevE = updatedVersions[c]?.edges || [];
@@ -3044,9 +3078,17 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           position: { x: n.position.x + maxX + 120, y: n.position.y }
         }));
 
+        // Não dá para ter certeza de que o novo trecho é outro processo:
+        // liga o fim do que já existia ao início do novo com a linha
+        // vermelha de validação (o usuário confirma ou apaga).
+        const isShape = (n: Node) => n.type !== 'swimlane' && n.type !== 'frame' && n.type !== 'junction';
+        const prevEnd = prevN.find((n) => n.type === 'end') || [...prevN].reverse().find(isShape);
+        const newStart = shiftedNodes.find((n) => n.type === 'start') || shiftedNodes.find(isShape);
+        const bridge = prevEnd && newStart ? [buildDubiousEdge(prevEnd.id, newStart.id)] : [];
+
         updatedVersions[c] = {
           nodes: [...prevN, ...shiftedNodes],
-          edges: [...prevE, ...genE]
+          edges: [...prevE, ...genE, ...bridge]
         };
       });
       newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
@@ -3074,11 +3116,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   };
 
   // AI Diagram Generation Execution
-  const executeGenerateAI = async (options: {
-    mode: 'replace' | 'new_version' | 'append';
-    newVersionName?: string;
-  }) => {
-    const { mode, newVersionName } = options;
+  const executeGenerateAI = async (options: { mode: 'replace' | 'append' }) => {
+    const { mode } = options;
     if (!deriveFromExisting && !prompt.trim() && aiFiles.length === 0) return;
 
     setShowAIConflictModal(false);
@@ -3161,7 +3200,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       buffer += decoder.decode();
       if (buffer.trim()) applyGeneratedJsonlLine(buffer, rawGenerated, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
 
-      finalizeGeneratedContent(rawGenerated, mode, newVersionName);
+      finalizeGeneratedContent(rawGenerated, mode);
     } catch (err: any) {
       if (err.name === 'AbortError') {
         console.log('Geração por IA cancelada');
@@ -3870,6 +3909,17 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                 </button>
               ))}
             </div>
+
+            {extraVersions.length > 0 && (
+              <button
+                onClick={() => setShowExtraVersions(true)}
+                className="px-2 py-1 text-[11px] font-bold rounded-lg bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 shrink-0 whitespace-nowrap flex items-center gap-1"
+                title="Versões antigas fora das três fixas — aproveite o conteúdo ou exclua"
+                data-extra-versions
+              >
+                <AlertTriangle size={12} /> {extraVersions.length} <span className="hidden md:inline">{extraVersions.length === 1 ? 'versão extra' : 'versões extras'}</span>
+              </button>
+            )}
 
             {/* Mobile Select Dropdown */}
             <select
@@ -5360,55 +5410,8 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               </div>
             </div>
 
-            {/* 3 Opções de Ação */}
+            {/* Opções: as versões são fixas (simples, normal, detalhado) */}
             <div className="space-y-3 mb-6">
-              {/* Opção 1: Criar Nova Versão (Mantendo a Antiga) */}
-              <div 
-                onClick={() => setAiConflictChoice('new_version')}
-                className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
-                  aiConflictChoice === 'new_version'
-                    ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-500/20 shadow-xs'
-                    : 'border-zinc-200 hover:border-zinc-300 bg-white'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
-                    aiConflictChoice === 'new_version' ? 'border-blue-600 bg-blue-600 text-white' : 'border-zinc-300'
-                  }`}>
-                    {aiConflictChoice === 'new_version' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-bold text-zinc-900 flex items-center gap-1.5">
-                        <CopyPlus size={15} className="text-blue-600" />
-                        Criar Nova Versão
-                      </span>
-                      <span className="text-[10px] font-extrabold uppercase tracking-wide bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
-                        Recomendado • Mantém a Antiga
-                      </span>
-                    </div>
-                    <p className="text-xs text-zinc-600 mt-1">
-                      Preserva todo o fluxo atual intacto e salva o novo fluxo gerado em uma nova versão independente.
-                    </p>
-                    
-                    {aiConflictChoice === 'new_version' && (
-                      <div className="mt-3 pt-2.5 border-t border-blue-200/60 animate-in fade-in duration-150" onClick={e => e.stopPropagation()}>
-                        <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-600 block mb-1">
-                          Nome da Nova Versão:
-                        </label>
-                        <input
-                          type="text"
-                          value={newVersionCustomName}
-                          onChange={(e) => setNewVersionCustomName(e.target.value)}
-                          placeholder="Ex: normal (v2), Revisão IA..."
-                          className="w-full text-xs font-semibold px-3 py-2 bg-white border border-blue-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 text-zinc-800"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
               {/* Opção 2: Substituir o Fluxo Existente */}
               <div 
                 onClick={() => setAiConflictChoice('replace')}
@@ -5454,10 +5457,10 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                   <div className="flex-1">
                     <span className="text-sm font-bold text-zinc-900 flex items-center gap-1.5">
                       <PlusCircle size={15} className="text-indigo-600" />
-                      Adicionar ao Lado (Mesclar)
+                      Adicionar ao Lado
                     </span>
                     <p className="text-xs text-zinc-600 mt-1">
-                      Mantém os blocos atuais e insere o novo fluxo gerado ao lado no mesmo canvas.
+                      Mantém o fluxo atual e coloca o novo ao lado, na mesma versão, ligado por uma linha vermelha para você confirmar ou apagar.
                     </p>
                   </div>
                 </div>
@@ -5484,31 +5487,19 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                 onClick={() => {
                   if (pendingManualPasteRef.current) {
                     pendingManualPasteRef.current = false;
-                    executeManualPasteImport({
-                      mode: aiConflictChoice,
-                      newVersionName: newVersionCustomName
-                    });
+                    executeManualPasteImport({ mode: aiConflictChoice });
                   } else {
-                    executeGenerateAI({
-                      mode: aiConflictChoice,
-                      newVersionName: newVersionCustomName
-                    });
+                    executeGenerateAI({ mode: aiConflictChoice });
                   }
                 }}
                 className={`px-5 py-2.5 text-xs font-bold rounded-xl text-white shadow-md transition-all flex items-center gap-2 cursor-pointer ${
                   aiConflictChoice === 'replace'
                     ? 'bg-red-600 hover:bg-red-700'
-                    : aiConflictChoice === 'new_version'
-                    ? 'bg-blue-600 hover:bg-blue-700'
                     : 'bg-indigo-600 hover:bg-indigo-700'
                 }`}
               >
                 <Sparkles size={15} />
-                {aiConflictChoice === 'new_version'
-                  ? 'Criar Nova Versão e Gerar'
-                  : aiConflictChoice === 'replace'
-                  ? 'Substituir e Gerar'
-                  : 'Adicionar e Gerar'}
+                {aiConflictChoice === 'replace' ? 'Substituir e Gerar' : 'Adicionar e Gerar'}
               </button>
             </div>
           </div>
@@ -5564,6 +5555,82 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
            <div className="w-full h-1.5 bg-zinc-100 rounded-full overflow-hidden">
              <div className="h-full bg-gradient-to-r from-blue-600 to-indigo-600 animate-pulse rounded-full w-full" />
            </div>
+        </div>
+      )}
+
+      {/* Versões extras (antigas, fora das três fixas) */}
+      {showExtraVersions && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4" onClick={() => setShowExtraVersions(false)}>
+          <div
+            className="bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[88vh] flex flex-col border border-zinc-200 animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+            data-extra-versions-dialog
+          >
+            <div className="px-5 sm:px-6 pt-5 pb-3 border-b border-zinc-100">
+              <h3 className="font-bold text-lg text-zinc-900">Versões extras</h3>
+              <p className="text-xs text-zinc-500 mt-1">
+                O diagrama usa só três versões: Simples, Normal e Detalhado. Estas ficaram de gerações antigas. Escolha para onde vai cada uma, ou exclua.
+              </p>
+            </div>
+            <div className="px-5 sm:px-6 py-4 overflow-y-auto custom-scrollbar flex-1 space-y-3">
+              {extraVersions.length === 0 ? (
+                <p className="text-sm text-zinc-600">Pronto: não há mais versões extras.</p>
+              ) : extraVersions.map((name) => {
+                const target = extraTargets[name] || guessTargetVersion(name);
+                const label = (n: string) => n.charAt(0).toUpperCase() + n.slice(1);
+                const targetCount = (target === activeVersion ? nodes.length : versions[target]?.nodes?.length) || 0;
+                return (
+                  <div key={name} className="rounded-2xl border border-zinc-200 p-3" data-extra-version={name}>
+                    <div className="text-sm font-bold text-zinc-800 break-words">{name}</div>
+                    <div className="text-[11px] text-zinc-500 mb-2">{versions[name]?.nodes?.length || 0} etapas</div>
+                    <label className="flex items-center gap-2 text-xs text-zinc-600 mb-2">
+                      <span className="shrink-0">Levar para:</span>
+                      <select
+                        value={target}
+                        onChange={(e) => setExtraTargets((prev) => ({ ...prev, [name]: e.target.value }))}
+                        className="flex-1 min-w-0 text-xs font-semibold bg-zinc-50 border border-zinc-200 rounded-lg px-2 py-1 text-zinc-800 outline-none"
+                        data-extra-target
+                      >
+                        {FIXED_VERSIONS.map((v) => (
+                          <option key={v} value={v}>{label(v)} ({(v === activeVersion ? nodes.length : versions[v]?.nodes?.length) || 0} etapas)</option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={() => resolveExtraVersion(name, 'substituir')}
+                        className="px-2 py-2 rounded-xl border border-zinc-200 text-[11px] font-bold text-zinc-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700"
+                        title={targetCount ? `Apaga as ${targetCount} etapas da versão ${label(target)} e coloca esta no lugar` : `Coloca esta na versão ${label(target)}`}
+                        data-extra-action="substituir"
+                      >
+                        Substituir
+                      </button>
+                      <button
+                        onClick={() => resolveExtraVersion(name, 'acrescentar')}
+                        className="px-2 py-2 rounded-xl border border-zinc-200 text-[11px] font-bold text-zinc-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700"
+                        title={`Mantém a versão ${label(target)} e coloca esta ao lado`}
+                        data-extra-action="acrescentar"
+                      >
+                        Acrescentar
+                      </button>
+                      <button
+                        onClick={() => resolveExtraVersion(name, 'excluir')}
+                        className="px-2 py-2 rounded-xl border border-zinc-200 text-[11px] font-bold text-red-600 hover:bg-red-50 hover:border-red-300"
+                        data-extra-action="excluir"
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-5 sm:px-6 py-4 border-t border-zinc-100 flex justify-end">
+              <button onClick={() => setShowExtraVersions(false)} className="px-4 py-2 text-sm font-semibold text-zinc-600 hover:bg-zinc-100 rounded-xl">
+                Fechar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
