@@ -130,8 +130,7 @@ import { calculateCumulativeTimes, exportTableToCSV, TimeSettings, defaultTimeSe
 import { deleteSelectionSafely, getActualEdgeEndpoint, getPositionFromHandleId, generateDefaultStepRoute } from '../utils/snapUtils';
 import { getObstacles, routeOrthogonalAuto, getManhattanNormal, validateRouteAgainstObstacles } from '../utils/orthogonalRouter';
 import { getShapeConnectionPoint } from '../utils/shapeGeometry';
-import { ensureConnectedGraph, buildDubiousEdge } from '../utils/graphSanitizer';
-import { splitIndependentProcesses, placeSideBySide } from '../utils/processSplit';
+import { ensureConnectedGraph } from '../utils/graphSanitizer';
 import { computeAlignmentSnap, GuideLine, GuideRect } from '../utils/alignmentGuides';
 import { computePageCuts, singleImageScale, choosePdfLayout, MIN_READABLE_SCALE, PDF_MARGINS, CANVAS_MAX_SIDE, Span } from '../utils/exportPaging';
 import { createPngStitcher, canStitchPng, stitchedScale } from '../utils/pngStitch';
@@ -2983,58 +2982,32 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     const versionsSemLigacao: string[] = [];
 
-    const versionsSeparadas: string[] = [];
-    // Tamanho de cada forma para pôr os processos lado a lado sem encostar.
-    const sizeOf = (n: Node) => {
-      const dim = getNodeDimensions(n.type);
-      return {
-        w: Number((n.style as any)?.width) || (n.width as number) || dim.width,
-        h: Number((n.style as any)?.height) || (n.height as number) || dim.height,
-      };
-    };
-
     Object.keys(rawGenerated).forEach(v => {
       const repaired = repairGeneratedVersion(rawGenerated[v]);
       if (repaired.report.missingEdges) versionsSemLigacao.push(v);
+      const connected = ensureConnectedGraph(
+        repaired.nodes as Node[],
+        repaired.edges as Edge[]
+      );
+      const sanitized = {
+        ...connected,
+        edges: fixDecisionExits(connected.nodes, connected.edges) as Edge[],
+      };
 
-      // Processos diferentes só ficam separados (lado a lado) com certeza;
-      // na dúvida é um processo só e os blocos soltos ganham a linha
-      // vermelha de validação.
-      const split = splitIndependentProcesses(repaired.nodes as Node[], repaired.edges as Edge[]);
-      if (split.certain) versionsSeparadas.push(`${v} (${split.groups.map((g) => g.name).join(', ')})`);
+      if (sanitized.nodes.some(n => {
+        const t = (n.data as any)?.timing;
+        return (t?.duration || 0) > 0 || (t?.setupTime || 0) > 0;
+      })) {
+        anyTimingGenerated = true;
+      }
 
-      const blocks = split.groups.map((group) => {
-        const connected = ensureConnectedGraph(group.nodes as Node[], group.edges as Edge[]);
-        const sanitized = {
-          ...connected,
-          edges: fixDecisionExits(connected.nodes, connected.edges) as Edge[],
-        };
-
-        if (sanitized.nodes.some(n => {
-          const t = (n.data as any)?.timing;
-          return (t?.duration || 0) > 0 || (t?.setupTime || 0) > 0;
-        })) {
-          anyTimingGenerated = true;
-        }
-
-        const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
-          sanitized.nodes,
-          sanitized.edges
-        );
-        return { nodes: buildSectorContainers(lNodes, 'TB') as Node[], edges: lEdges as Edge[] };
-      });
-
-      layoutedGenerated[v] = blocks.length === 1
-        ? blocks[0]
-        : { nodes: placeSideBySide(blocks.map((b) => b.nodes), sizeOf, 240), edges: blocks.flatMap((b) => b.edges) };
+      const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
+        sanitized.nodes,
+        sanitized.edges
+      );
+      const nodesWithSectors = buildSectorContainers(lNodes, 'TB');
+      layoutedGenerated[v] = { nodes: nodesWithSectors, edges: lEdges };
     });
-
-    if (versionsSeparadas.length > 0) {
-      showToast({
-        message: `Processos diferentes desenhados lado a lado: ${versionsSeparadas.join('; ')}.`,
-        timeout: 9000,
-      });
-    }
 
     if (versionsSemLigacao.length > 0) {
       // Quase sempre é a resposta da IA cortada por tamanho: ela escreveu as
@@ -3078,17 +3051,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           position: { x: n.position.x + maxX + 120, y: n.position.y }
         }));
 
-        // Não dá para ter certeza de que o novo trecho é outro processo:
-        // liga o fim do que já existia ao início do novo com a linha
-        // vermelha de validação (o usuário confirma ou apaga).
-        const isShape = (n: Node) => n.type !== 'swimlane' && n.type !== 'frame' && n.type !== 'junction';
-        const prevEnd = prevN.find((n) => n.type === 'end') || [...prevN].reverse().find(isShape);
-        const newStart = shiftedNodes.find((n) => n.type === 'start') || shiftedNodes.find(isShape);
-        const bridge = prevEnd && newStart ? [buildDubiousEdge(prevEnd.id, newStart.id)] : [];
-
         updatedVersions[c] = {
           nodes: [...prevN, ...shiftedNodes],
-          edges: [...prevE, ...genE, ...bridge]
+          edges: [...prevE, ...genE]
         };
       });
       newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
@@ -5457,10 +5422,10 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                   <div className="flex-1">
                     <span className="text-sm font-bold text-zinc-900 flex items-center gap-1.5">
                       <PlusCircle size={15} className="text-indigo-600" />
-                      Adicionar ao Lado
+                      Adicionar ao Lado (Mesclar)
                     </span>
                     <p className="text-xs text-zinc-600 mt-1">
-                      Mantém o fluxo atual e coloca o novo ao lado, na mesma versão, ligado por uma linha vermelha para você confirmar ou apagar.
+                      Mantém os blocos atuais e insere o novo fluxo gerado ao lado no mesmo canvas.
                     </p>
                   </div>
                 </div>
