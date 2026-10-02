@@ -349,6 +349,81 @@ function sequentialStripes(nodes: Node[], boxes: SectorBox[], direction: 'TB' | 
 }
 
 /**
+ * Raias HORIZONTAIS num fluxo de cima para baixo (como o modelo do usuário):
+ * faixas empilhadas na ordem em que os setores aparecem descendo o fluxo,
+ * cada uma da largura do fluxo inteiro. As etapas não saem do lugar. Se um
+ * setor volta a aparecer mais abaixo, ganha outra faixa naquele trecho (o
+ * fluxo nunca precisa subir). Etapas de setores diferentes no MESMO nível
+ * (ramos paralelos) ficam numa faixa só, com os nomes juntos ("A / B").
+ */
+export function horizontalBandsTB(nodes: Node[]): Node[] {
+  const shapes = nodes.filter((n) => !isContainerOrInfra(n));
+  if (new Set(shapes.map(deptOf).filter(Boolean)).size < 2) return nodes;
+  const boxOf = (n: Node) => getSectorNodeBox(n);
+
+  // Níveis do fluxo (mesma altura do centro = mesmo nível do layout).
+  const sorted = [...shapes].sort((a, b) => boxOf(a).y + boxOf(a).height / 2 - (boxOf(b).y + boxOf(b).height / 2));
+  type Rank = { nodes: Node[]; depts: Set<string>; top: number; bottom: number };
+  const ranks: Rank[] = [];
+  let rankY = -Infinity;
+  sorted.forEach((n) => {
+    const b = boxOf(n);
+    const cy = b.y + b.height / 2;
+    if (cy - rankY > 12) { ranks.push({ nodes: [], depts: new Set(), top: Infinity, bottom: -Infinity }); rankY = cy; }
+    const r = ranks[ranks.length - 1];
+    r.nodes.push(n);
+    if (deptOf(n)) r.depts.add(deptOf(n));
+    r.top = Math.min(r.top, b.y);
+    r.bottom = Math.max(r.bottom, b.y + b.height);
+  });
+
+  // Trechos: níveis seguidos do mesmo setor (nível sem setor acompanha o trecho).
+  type Band = { names: string[]; top: number; bottom: number };
+  const bands: Band[] = [];
+  ranks.forEach((r) => {
+    const last = bands[bands.length - 1];
+    const names = [...r.depts];
+    const continues = last && (names.length === 0 || names.some((d) => last.names.includes(d)));
+    if (continues) {
+      names.forEach((d) => { if (!last.names.includes(d)) last.names.push(d); });
+      last.top = Math.min(last.top, r.top);
+      last.bottom = Math.max(last.bottom, r.bottom);
+    } else {
+      bands.push({ names: names.length ? names : [''], top: r.top, bottom: r.bottom });
+    }
+  });
+  // Primeiro trecho sem setor (ex.: o início) entra no trecho seguinte.
+  if (bands.length > 1 && bands[0].names.join('') === '') {
+    bands[1].top = Math.min(bands[1].top, bands[0].top);
+    bands.shift();
+  }
+  if (bands.length < 2) return nodes;
+
+  const minX = Math.min(...shapes.map((n) => boxOf(n).x));
+  const maxX = Math.max(...shapes.map((n) => boxOf(n).x + boxOf(n).width));
+  const cuts = bands.slice(0, -1).map((b, i) => (b.bottom + bands[i + 1].top) / 2);
+  const containers: Node[] = bands.map((b, idx) => {
+    const y1 = idx === 0 ? b.top - SECTOR_CONTAINER_TOP_PADDING : cuts[idx - 1];
+    const y2 = idx === bands.length - 1 ? b.bottom + SECTOR_CONTAINER_BOTTOM_PADDING : cuts[idx];
+    return {
+      id: `sector_${idx}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      type: 'swimlane',
+      position: { x: minX - SECTOR_CONTAINER_SIDE_PADDING, y: y1 },
+      zIndex: CONTAINER_BASE_Z_INDEX,
+      style: { width: maxX - minX + SECTOR_CONTAINER_SIDE_PADDING * 2, height: y2 - y1 },
+      data: {
+        label: b.names.filter(Boolean).join(' / '),
+        orientation: 'horizontal',
+        styleOverride: {},
+        timing: { duration: 0, setupTime: 0, waitTime: 0, pauseTime: 0, otherExtraTime: 0, status: 'pending' },
+        generatedByAI: true,
+      },
+    } as Node;
+  });
+  return [...containers, ...nodes];
+}
+
+/**
  * Depois do layout automático, agrupa os nós pelo campo "department" (setor
  * preenchido pela IA) e desenha uma RAIA por setor, na orientação escolhida
  * para o diagrama (vertical por padrão; a mesma em todas as versões):
@@ -370,6 +445,11 @@ export function buildSectorContainers(
   const boxes = computeSectorBoxes(groups);
   if (boxes.length < 2) return nodes;
 
+  // Fluxo de cima para baixo (o padrão do app): a orientação só muda como
+  // as raias se organizam — colunas (verticais) ou faixas empilhadas (horizontais).
+  if (direction !== 'LR') {
+    return orientation === 'horizontal' ? horizontalBandsTB(nodes) : arrangeLaneColumns(nodes, 'TB');
+  }
   if (flowDirectionFor(orientation) === direction) return arrangeLaneColumns(nodes, direction);
   if (sectorsAreSequential(boxes, direction)) return sequentialStripes(nodes, boxes, direction);
   // Não comporta a orientação escolhida neste sentido: alternativa de segurança.

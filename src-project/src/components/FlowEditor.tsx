@@ -96,7 +96,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments, lanesFit, flowDirectionFor, aiLaneOrientation, LaneOrientation } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments, aiLaneOrientation, LaneOrientation } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { NavigationModeContext } from '../lib/navigationMode';
 import { applyGeneratedJsonlLine, parseGeneratedBlock, repairGeneratedVersion, fixDecisionExits } from '../utils/aiGenerationParser';
@@ -116,6 +116,7 @@ import { ImportVersionsModal } from './ImportVersionsModal';
 import { readImportFile, applyImport, ImportFile, ImportMode, ImportSource } from '../lib/importVersions';
 import { FIXED_VERSIONS, isFixedVersion, guessTargetVersion, normalizeVersions } from '../lib/fixedVersions';
 import { COMPLETE_MARKER, mergeGeneratedPart } from '../lib/compactFormat';
+import { assignFlowHandles } from '../utils/flowHandles';
 import {
   buildClip,
   collectSelection,
@@ -518,6 +519,18 @@ function AlignmentGuidesOverlay({ guides }: { guides: AlignmentGuidesState }) {
     </svg>
   );
 }
+
+/** Tamanho de uma forma no desenho (medido, definido ou o padrão do tipo). */
+const shapeSize = (n: any): { width: number; height: number } => {
+  const dim = getNodeDimensions(n.type);
+  return {
+    width: (n.measured?.width as number) || (n.width as number) || Number(n.style?.width) || dim.width,
+    height: (n.measured?.height as number) || (n.height as number) || Number(n.style?.height) || dim.height,
+  };
+};
+
+/** Pontos de saída/entrada das linhas no fluxo de cima para baixo (ver utils/flowHandles). */
+const routeTB = (nodes: Node[], edges: Edge[]): Edge[] => assignFlowHandles(nodes as any, edges as any, shapeSize) as Edge[];
 
 /** Preferência de orientação das raias para diagramas NOVOS (a de cada diagrama fica nele). */
 const LANE_ORIENTATION_PREF_KEY = 'labirinto_lane_orientation_v1';
@@ -2336,12 +2349,11 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
   /** Refaz o layout de uma versão com as raias da IA na orientação pedida. */
   const relayoutWithLanes = (vNodes: Node[], vEdges: Edge[], o: LaneOrientation) => {
+    // O fluxo é sempre de cima para baixo; a orientação só muda as raias.
     const stripped = vNodes.filter((n) => !isAILane(n));
-    const dir = flowDirectionFor(o);
-    const { nodes: lN, edges: lE } = getLayoutedElements(stripped, vEdges, dir);
-    const withLanes = buildSectorContainers(lN as Node[], dir, o);
-    const routed = recomputeEdgeRoutingForNodes(lE as Edge[], withLanes, new Set(withLanes.map((n) => n.id)));
-    return { nodes: withLanes, edges: routed };
+    const { nodes: lN, edges: lE } = getLayoutedElements(stripped, vEdges, 'TB');
+    const withLanes = buildSectorContainers(lN as Node[], 'TB', o);
+    return { nodes: withLanes, edges: routeTB(withLanes, lE as Edge[]) };
   };
 
   /** Guarda a orientação no diagrama (e como preferência para os próximos). */
@@ -2738,21 +2750,14 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
   // Auto Layout using Dagre
   const applyAutoLayout = (requested: 'TB' | 'LR' = 'TB') => {
-    // As raias da IA mantêm a orientação do diagrama: se o sentido pedido
-    // não as comporta (setores que se alternam), organiza no sentido delas.
-    let direction = requested;
-    let { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, direction);
+    // Com raias por setor o fluxo é SEMPRE de cima para baixo (a orientação
+    // das raias só muda como elas se organizam: colunas ou faixas).
     const hasAILanes = nodes.some(isAILane);
-    if (hasAILanes && !lanesFit(layoutedNodes, direction, laneOrientation)) {
-      direction = flowDirectionFor(laneOrientation);
-      ({ nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, direction));
-      showToast({
-        message: laneOrientation === 'vertical'
-          ? 'As raias deste diagrama são verticais: o fluxo foi organizado de cima para baixo para manter as raias.'
-          : 'As raias deste diagrama são horizontais: o fluxo foi organizado da esquerda para a direita para manter as raias.',
-        timeout: 8000,
-      });
+    const direction: 'TB' | 'LR' = hasAILanes ? 'TB' : requested;
+    if (hasAILanes && requested === 'LR') {
+      showToast({ message: 'Com raias por setor o fluxo fica sempre de cima para baixo.', timeout: 6000 });
     }
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, direction);
     // O dagre reposiciona os nós de processo sem saber que existem
     // raias/quadros gerados pela IA ao redor deles — reconstrói essas
     // raias/quadros (só os da IA; os manuais do usuário ficam intocados)
@@ -2760,7 +2765,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     const finalNodes = rebuildAIContainers(layoutedNodes, direction, laneOrientation);
     const finalEdges = finalNodes === layoutedNodes
       ? layoutedEdges
-      : recomputeEdgeRoutingForNodes(layoutedEdges, finalNodes, new Set(finalNodes.map((n) => n.id)));
+      : routeTB(finalNodes, layoutedEdges);
     setNodes([...finalNodes]);
     setEdges([...finalEdges]);
     pushHistory(finalNodes, finalEdges);
@@ -2771,12 +2776,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // Align and Distribute Tools
   const alignSelectedNodes = (type: 'center-x' | 'center-y' | 'left' | 'right' | 'top' | 'bottom' | 'distribute-v' | 'distribute-h' | 'straighten-all') => {
     if (type === 'straighten-all') {
-      const straightenDir = nodes.some(isAILane) ? flowDirectionFor(laneOrientation) : 'TB';
+      const straightenDir: 'TB' | 'LR' = 'TB';
       const { nodes: lNodes, edges: lEdges } = getLayoutedElements(nodes, edges, straightenDir);
       const finalNodes = rebuildAIContainers(lNodes, straightenDir, laneOrientation);
       const finalEdges = finalNodes === lNodes
         ? lEdges
-        : recomputeEdgeRoutingForNodes(lEdges, finalNodes, new Set(finalNodes.map((n) => n.id)));
+        : routeTB(finalNodes, lEdges);
       setNodes([...finalNodes]);
       setEdges([...finalEdges]);
       pushHistory(finalNodes, finalEdges);
@@ -3097,8 +3102,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
       // Com 2+ setores o sentido do fluxo segue a orientação das raias do
       // diagrama (verticais: de cima para baixo; horizontais: para a direita).
-      const deptCount = new Set(sanitized.nodes.map((n) => String((n.data as any)?.timing?.department || '').trim()).filter(Boolean)).size;
-      const layoutDir = deptCount >= 2 ? flowDirectionFor(laneOrientation) : 'TB';
+      // Sempre de cima para baixo (como o modelo do usuário); a orientação
+      // escolhida muda só a organização das raias.
+      const layoutDir: 'TB' | 'LR' = 'TB';
       const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
         sanitized.nodes,
         sanitized.edges,
@@ -3110,7 +3116,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const nodesWithSectors = buildSectorContainers(withDepartments, layoutDir, laneOrientation);
       // As raias podem levar etapas para a coluna do seu setor: as linhas
       // são recalculadas para a nova posição (sem ficarem em diagonal).
-      const routedEdges = recomputeEdgeRoutingForNodes(lEdges, nodesWithSectors, new Set(nodesWithSectors.map((n) => n.id)));
+      // Pontos de saída/entrada recalculados para a posição final: volta de
+      // decisão pela lateral (não por cima da linha que chega) e saídas da
+      // mesma decisão sempre em pontos diferentes.
+      const routedEdges = routeTB(nodesWithSectors, lEdges);
       layoutedGenerated[v] = { nodes: nodesWithSectors, edges: routedEdges };
     });
 
@@ -3842,9 +3851,9 @@ Este sistema é uma plataforma avançada para modelagem, engenharia de processos
 
 ## 2. Estrutura de Versões (Níveis de Complexidade)
 O sistema suporta a visualização e gestão de um mesmo processo em 3 níveis de complexidade complementares:
-- **Simples (Visão Executiva / Macro):** 4 a 6 etapas essenciais. Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.
-- **Normal (Visão Tática / Padrão de Processo):** 9 a 15 etapas. Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.
-- **Detalhado (Visão Operacional / Deep Dive):** 16 a 28+ etapas. Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.
+- **Simples (Visão Executiva / Macro):** uma etapa por setor ou grande fase (normalmente 4 a 10). Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.
+- **Normal (Visão Tática / Padrão de Processo):** de 2 a 6 etapas por setor (normalmente 15 a 45). Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.
+- **Detalhado (Visão Operacional / Deep Dive):** toda ação concreta da fonte vira uma etapa e toda conferência vira uma decisão com 2 saídas (processos com vários setores costumam passar de 60 a 150 etapas). Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.
 
 **Memória de Tela (Viewport Individual):** Cada aba possui seu próprio estado de coordenadas e zoom em cache. Ao alternar entre as abas (ex: Detalhado para Simples), a visualização se ajusta com precisão para onde você estava trabalhando, eliminando deslocamentos indesejados.
 

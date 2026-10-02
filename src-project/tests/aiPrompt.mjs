@@ -16,7 +16,12 @@ const prompt = buildPrompt({
 
 // Base original preservada
 check('pede ramificações e evita cadeia reta', /Avoid simplistic straight-line chains/.test(prompt));
-check('mantém os níveis originais (detalhado 16 to 28+)', /'detalhado' \(Operational Deep-Dive\): 16 to 28\+ nodes/.test(prompt));
+// Pedido do usuário: o detalhado estava curto demais (parava perto de 28
+// etapas). Agora acompanha a fonte, usando o fluxo real dele como medida —
+// o corte da resposta grande é resolvido pela continuação automática.
+check('detalhado acompanha a fonte: toda ação vira etapa, toda conferência vira decisão', /TODA ação concreta descrita na fonte vira uma etapa própria/.test(prompt) && /TODA conferência, verificação ou condição vira um losango/.test(prompt) && /NÃO resuma nem agrupe ações/.test(prompt));
+check('referência real de tamanho (118 etapas e 31 decisões no detalhado)', /118 etapas e 31 decisões no detalhado/.test(prompt) && /MAIS etapas e MAIS decisões que o normal/.test(prompt));
+check('sem limite baixo antigo (16 a 28)', !/16 to 28\+ nodes/.test(prompt));
 check('mantém convergência e loops de retrabalho', /Convergence \(Merges\)/.test(prompt) && /Feedback \/ Correction Loops/.test(prompt));
 check('mantém a regra do losango com no mínimo 2 saídas', /NO MÍNIMO 2 arestas de saída/.test(prompt));
 check('pede setores/raias (department)', /department/i.test(prompt) && /SETORES, ÁREAS OU DEPARTAMENTOS DIFERENTES \(RAIAS\)/.test(prompt));

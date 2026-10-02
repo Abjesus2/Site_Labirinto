@@ -15,9 +15,9 @@ O **Labirinto** é uma plataforma avançada para modelagem, engenharia de proces
 
 ## 2. Estrutura de Versões (Níveis de Complexidade)
 O sistema suporta a visualização e gestão de um mesmo processo em 3 níveis de complexidade complementares:
-- **Simples (Visão Executiva / Macro):** 4 a 6 etapas essenciais. Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.
-- **Normal (Visão Tática / Padrão de Processo):** 9 a 15 etapas. Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.
-- **Detalhado (Visão Operacional / Deep Dive):** 16 a 28+ etapas. Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.
+- **Simples (Visão Executiva / Macro):** uma etapa por setor ou grande fase (normalmente 4 a 10). Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.
+- **Normal (Visão Tática / Padrão de Processo):** de 2 a 6 etapas por setor (normalmente 15 a 45). Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.
+- **Detalhado (Visão Operacional / Deep Dive):** toda ação concreta da fonte vira uma etapa e toda conferência vira uma decisão com 2 saídas (processos com vários setores costumam passar de 60 a 150 etapas). Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.
 
 **Memória de Tela (Viewport Individual):** Cada aba possui seu próprio estado de coordenadas e zoom em cache. Ao alternar entre as abas (ex: Detalhado para Simples), a visualização se ajusta com precisão para onde você estava trabalhando, eliminando deslocamentos indesejados.
 
@@ -176,9 +176,9 @@ export function generateSystemManualHTML(): string {
   <h2>2. Estrutura de Versões (Níveis de Complexidade)</h2>
   <p>O sistema suporta a visualização e gestão de um mesmo processo em 3 níveis de complexidade complementares:</p>
   <ul>
-    <li><strong>Simples (Visão Executiva / Macro):</strong> 4 a 6 etapas essenciais. Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.</li>
-    <li><strong>Normal (Visão Tática / Padrão de Processo):</strong> 9 a 15 etapas. Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.</li>
-    <li><strong>Detalhado (Visão Operacional / Deep Dive):</strong> 16 a 28+ etapas. Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.</li>
+    <li><strong>Simples (Visão Executiva / Macro):</strong> uma etapa por setor ou grande fase (normalmente 4 a 10). Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.</li>
+    <li><strong>Normal (Visão Tática / Padrão de Processo):</strong> de 2 a 6 etapas por setor (normalmente 15 a 45). Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.</li>
+    <li><strong>Detalhado (Visão Operacional / Deep Dive):</strong> toda ação concreta da fonte vira uma etapa e toda conferência vira uma decisão com 2 saídas (processos com vários setores costumam passar de 60 a 150 etapas). Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.</li>
   </ul>
   <div class="highlight-box">
     <strong>Memória de Tela (Viewport Individual):</strong> Cada aba possui seu próprio estado de coordenadas e zoom em cache. Ao alternar entre as abas, a visualização se ajusta com precisão para onde você estava trabalhando.
@@ -361,9 +361,9 @@ export function exportSystemManualPDF(fileName: string): void {
   // Section 2
   renderSectionHeader('2. Estrutura de Versões (Níveis de Complexidade)');
   renderParagraph('O sistema suporta a visualização e gestão de um mesmo processo em 3 níveis de complexidade complementares:');
-  renderBullet('Simples (Visão Executiva / Macro)', '4 a 6 etapas essenciais. Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.');
-  renderBullet('Normal (Visão Tática / Padrão)', '9 a 15 etapas. Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.');
-  renderBullet('Detalhado (Visão Operacional / Deep Dive)', '16 a 28+ etapas. Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.');
+  renderBullet('Simples (Visão Executiva / Macro)', 'uma etapa por setor ou grande fase (normalmente 4 a 10). Destaca o objetivo final e os grandes marcos do processo sem sobrecarregar com detalhes operacionais.');
+  renderBullet('Normal (Visão Tática / Padrão)', 'de 2 a 6 etapas por setor (normalmente 15 a 45). Apresenta os pontos de decisão, ramificações condicionais, caminhos alternativos de exceção e reconvergência no fluxo principal.');
+  renderBullet('Detalhado (Visão Operacional / Deep Dive)', 'toda ação concreta da fonte vira uma etapa e toda conferência vira uma decisão com 2 saídas (processos com vários setores costumam passar de 60 a 150 etapas). Mapeia exaustivamente todas as micro-atividades, preparações/setups, validações prévias, geração de documentos/registros em banco, múltiplos cenários condicionais, caminhos paralelos, loops de correção e checkpoints de qualidade.');
   renderCallout('Memória de Tela (Viewport Individual)', 'Cada aba possui seu próprio estado de coordenadas e zoom em cache. Ao alternar entre abas, a visualização se ajusta com precisão para onde você estava trabalhando.');
 
   // Section 3

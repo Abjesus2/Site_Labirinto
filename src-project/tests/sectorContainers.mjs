@@ -1,4 +1,4 @@
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments, verticalLanesFit, lanesFit, flowDirectionFor, aiLaneOrientation } from '../.tmp-sectorContainers.mjs';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments, verticalLanesFit, lanesFit, flowDirectionFor, aiLaneOrientation, horizontalBandsTB } from '../.tmp-sectorContainers.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -141,6 +141,22 @@ const proc = (id, x, y, dept) => ({
   const altTB = [proc('a1', 0, 0, 'Vendas'), proc('b1', 0, 150, 'Financeiro'), proc('a2', 0, 300, 'Vendas')];
   check('horizontais não cabem no fluxo para baixo com setores alternados (reorganiza para a direita)', lanesFit(altTB, 'TB', 'horizontal') === false && lanesFit(altTB, 'LR', 'horizontal') === true);
   check('orientação das raias existentes é reconhecida', aiLaneOrientation(buildSectorContainers(altTB, 'TB', 'vertical')) === 'vertical' && aiLaneOrientation([proc('x', 0, 0, 'A')]) === null);
+}
+
+// 5d. Raias HORIZONTAIS com fluxo de cima para baixo (como o modelo do
+//     usuário): faixas empilhadas na ordem do fluxo; setor que reaparece
+//     ganha outra faixa; etapas não saem do lugar.
+{
+  const nodes = [proc('a1', 0, 0, 'Recebimento'), proc('a2', 0, 150, 'Recebimento'), proc('b1', 0, 300, 'Armazenagem'), proc('a3', 0, 450, 'Recebimento'), proc('c1', 0, 600, 'Expedição'), proc('c2', 300, 600, '')];
+  const r = buildSectorContainers(nodes, 'TB', 'horizontal');
+  const bands = r.filter((n) => n.type === 'swimlane').sort((a, b) => a.position.y - b.position.y);
+  check('horizontais + fluxo para baixo: faixas na ordem do fluxo (setor que volta ganha nova faixa)', bands.map((b) => b.data.label).join(' > ') === 'Recebimento > Armazenagem > Recebimento > Expedição', bands.map((b) => b.data.label).join(' > '));
+  check('faixas empilhadas, encostadas, mesma largura, todas horizontais', bands.every((b, i) => i === 0 || Math.abs(b.position.y - (bands[i - 1].position.y + bands[i - 1].style.height)) < 0.01) && bands.every((b) => b.style.width === bands[0].style.width && b.data.orientation === 'horizontal'));
+  check('etapas não saem do lugar', ['a1', 'b1', 'a3', 'c2'].every((id) => { const n = r.find((x) => x.id === id); const o = nodes.find((x) => x.id === id); return n.position.x === o.position.x && n.position.y === o.position.y; }));
+  const dentro = r.filter((n) => n.type === 'process').every((n) => bands.some((b) => n.position.y >= b.position.y && n.position.y + 70 <= b.position.y + b.style.height));
+  check('cada etapa dentro de uma faixa', dentro);
+  const paralelo = horizontalBandsTB([proc('a', 0, 0, 'A'), proc('b1', 0, 150, 'B'), proc('c1', 300, 150, 'C'), proc('d', 0, 300, 'D')]);
+  check('ramos paralelos de setores diferentes no mesmo nível ficam numa faixa só ("B / C")', paralelo.filter((n) => n.type === 'swimlane').map((b) => b.data.label).join(' > ') === 'A > B / C > D');
 }
 
 // 6. rebuildAIContainers: depois de um "Organizar" (dagre) que reposiciona
