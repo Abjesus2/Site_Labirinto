@@ -1,4 +1,4 @@
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments } from '../.tmp-sectorContainers.mjs';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments, verticalLanesFit, lanesFit, flowDirectionFor, aiLaneOrientation } from '../.tmp-sectorContainers.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -63,9 +63,10 @@ const proc = (id, x, y, dept) => ({
   ];
   const result = buildSectorContainers(nodes, 'TB');
   const lanes = result.filter((n) => n.type === 'swimlane');
-  check('setores sequenciais viram 2 raias', lanes.length === 2);
-  check('raias sequenciais têm a mesma largura (largura cheia do fluxo)', lanes[0]?.style?.width === lanes[1]?.style?.width, `${lanes[0]?.style?.width} vs ${lanes[1]?.style?.width}`);
-  check('raias sequenciais começam no mesmo X (alinhadas à esquerda)', lanes[0]?.position?.x === lanes[1]?.position?.x);
+  check('setores em sequência também viram raias VERTICAIS (2 colunas)', lanes.length === 2 && lanes.every((l) => l.data.orientation === 'vertical'));
+  check('colunas lado a lado, encostadas, mesma altura e mesmo topo', Math.abs(lanes[1].position.x - (lanes[0].position.x + lanes[0].style.width)) < 0.01 && lanes[0].style.height === lanes[1].style.height && lanes[0].position.y === lanes[1].position.y);
+  const byId = Object.fromEntries(result.map((n) => [n.id, n]));
+  check('cada etapa dentro da coluna do seu setor', ['a1', 'a2', 'b1', 'b2'].every((id) => { const n = byId[id]; const l = lanes.find((x) => x.data.label === n.data.timing.department); return n.position.x >= l.position.x && n.position.x + 210 <= l.position.x + l.style.width; }));
 }
 
 // 5. Setores que se alternam ao longo do fluxo (A -> B -> A) viram RAIAS de
@@ -97,12 +98,17 @@ const proc = (id, x, y, dept) => ({
   check('ordem no sentido do fluxo não muda (altura das etapas igual)', ['a1', 'b1', 'a2', 'c1', 'b2'].every((id) => byId[id].position.y === nodes.find((n) => n.id === id).position.y));
   check('etapas não se sobrepõem', (() => { const r = ['a1', 'b1', 'a2', 'c1', 'b2'].map((id) => byId[id].position); for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) if (r[i].x < r[j].x + W && r[j].x < r[i].x + W && r[i].y < r[j].y + H && r[j].y < r[i].y + H) return false; return true; })());
 
-  // Fluxo da esquerda para a direita: raias horizontais (uma linha por setor).
-  const lr = buildSectorContainers([proc('a1', 0, 0, 'Recebimento'), proc('b1', 300, 0, 'Estoque'), proc('a2', 600, 0, 'Recebimento')], 'LR');
-  const lrLanes = lr.filter((n) => n.type === 'swimlane');
-  const lrById = Object.fromEntries(lr.map((n) => [n.id, n]));
-  check('fluxo para a direita: raias horizontais empilhadas', lrLanes.length === 2 && lrLanes[1].position.y === lrLanes[0].position.y + lrLanes[0].style.height && lrLanes.every((l) => l.data.orientation === 'horizontal'));
-  check('fluxo para a direita: etapas mantêm a posição no sentido do fluxo', lrById.a1.position.x === 0 && lrById.b1.position.x === 300 && lrById.a2.position.x === 600 && lrById.b1.position.y > lrById.a1.position.y);
+  // Fluxo da esquerda para a direita com setores alternados: raias verticais
+  // não cabem — o app reorganiza de cima para baixo (verticalLanesFit).
+  const alternadoLR = [proc('a1', 0, 0, 'Recebimento'), proc('b1', 300, 0, 'Estoque'), proc('a2', 600, 0, 'Recebimento')];
+  check('para a direita com setores alternados: raias verticais não cabem', verticalLanesFit(alternadoLR, 'LR') === false && verticalLanesFit(alternadoLR, 'TB') === true);
+
+  // Fluxo da esquerda para a direita com setores em sequência: faixas
+  // VERTICAIS, uma por trecho, encostadas.
+  const seqLR = buildSectorContainers([proc('a1', 0, 0, 'Recebimento'), proc('a2', 300, 0, 'Recebimento'), proc('b1', 600, 0, 'Estoque'), proc('b2', 900, 0, 'Estoque')], 'LR');
+  const seqLanes = seqLR.filter((n) => n.type === 'swimlane');
+  check('para a direita com setores em sequência: raias verticais encostadas', seqLanes.length === 2 && seqLanes.every((l) => l.data.orientation === 'vertical') && Math.abs(seqLanes[1].position.x - (seqLanes[0].position.x + seqLanes[0].style.width)) < 0.01 && seqLanes[0].style.height === seqLanes[1].style.height);
+  check('para a direita: etapas não saem do lugar', seqLR.find((n) => n.id === 'b1').position.x === 600 && verticalLanesFit(seqLR, 'LR'));
 }
 
 // 5b. Etapa sem setor num fluxo com setores herda o do vizinho.
@@ -120,6 +126,21 @@ const proc = (id, x, y, dept) => ({
   check('início sem setor herda o da etapa seguinte', filled.s === 'Recebimento');
   const umSetor = [proc('a', 0, 0, 'Vendas'), proc('b', 0, 100, '')];
   check('um setor só: nada é preenchido (sem raia)', fillMissingDepartments(umSetor, [{ source: 'a', target: 'b' }]) === umSetor);
+}
+
+// 5c. Escolha do usuário: raias HORIZONTAIS.
+{
+  check('sentido do fluxo combina com a orientação', flowDirectionFor('vertical') === 'TB' && flowDirectionFor('horizontal') === 'LR');
+  const alternado = [proc('a1', 0, 0, 'Recebimento'), proc('b1', 300, 0, 'Estoque'), proc('a2', 600, 0, 'Recebimento')];
+  const h = buildSectorContainers(alternado, 'LR', 'horizontal');
+  const hl = h.filter((n) => n.type === 'swimlane');
+  check('horizontais + fluxo para a direita: uma faixa por setor, empilhadas', hl.length === 2 && hl.every((l) => l.data.orientation === 'horizontal') && hl[1].position.y === hl[0].position.y + hl[0].style.height && aiLaneOrientation(h) === 'horizontal');
+  const seqTB = buildSectorContainers([proc('a1', 0, 0, 'Vendas'), proc('a2', 0, 150, 'Vendas'), proc('b1', 0, 300, 'Financeiro'), proc('b2', 0, 450, 'Financeiro')], 'TB', 'horizontal');
+  const sl = seqTB.filter((n) => n.type === 'swimlane');
+  check('horizontais + fluxo para baixo com setores em sequência: faixas horizontais encostadas, etapas no lugar', sl.length === 2 && sl.every((l) => l.data.orientation === 'horizontal') && Math.abs(sl[1].position.y - (sl[0].position.y + sl[0].style.height)) < 0.01 && seqTB.find((n) => n.id === 'b1').position.x === 0);
+  const altTB = [proc('a1', 0, 0, 'Vendas'), proc('b1', 0, 150, 'Financeiro'), proc('a2', 0, 300, 'Vendas')];
+  check('horizontais não cabem no fluxo para baixo com setores alternados (reorganiza para a direita)', lanesFit(altTB, 'TB', 'horizontal') === false && lanesFit(altTB, 'LR', 'horizontal') === true);
+  check('orientação das raias existentes é reconhecida', aiLaneOrientation(buildSectorContainers(altTB, 'TB', 'vertical')) === 'vertical' && aiLaneOrientation([proc('x', 0, 0, 'A')]) === null);
 }
 
 // 6. rebuildAIContainers: depois de um "Organizar" (dagre) que reposiciona
@@ -140,7 +161,9 @@ const proc = (id, x, y, dept) => ({
   check('as raias antigas (posição/tamanho velhos) são descartadas, não acumulam duplicadas', lanes.length === 2, 'raias encontradas: ' + lanes.length);
   check('a raia reconstruída envolve a posição ATUAL dos nós, não a antiga', lanes.every((l) => l.position.x > -999 && l.position.y > -999), JSON.stringify(lanes.map((l) => l.position)));
   const a1 = result.find((n) => n.id === 'a1');
-  check('nós de processo continuam no lugar (rebuildAIContainers só mexe nas raias/quadros)', a1.position.x === 0 && a1.position.y === 0);
+  const b1 = result.find((n) => n.id === 'b1');
+  check('raias reconstruídas continuam verticais', lanes.every((l) => l.data.orientation === 'vertical'));
+  check('etapas mantêm a ordem no sentido do fluxo (só vão para a coluna do setor)', a1.position.y === 0 && b1.position.y === 300);
 }
 
 // 7. Raia/quadro criada manualmente pelo usuário (sem generatedByAI) nunca é

@@ -280,78 +280,100 @@ export function arrangeLaneColumns(nodes: Node[], direction: 'TB' | 'LR' = 'TB')
   return [...containers, ...moved];
 }
 
+/** Orientação das raias escolhida para o diagrama (vale para todas as versões). */
+export type LaneOrientation = 'vertical' | 'horizontal';
+
 /**
- * Depois do layout automático, agrupa os nós pelo campo "department" (setor
- * preenchido pela IA) e desenha uma raia ou um quadro ao redor de cada grupo,
- * para separar visualmente quem executa cada etapa. Sempre RAIAS: faixas
- * empilhadas no sentido do fluxo quando os setores aparecem em sequência,
- * sem se misturar; faixas lado a lado (uma por setor, atravessando o fluxo
- * inteiro) quando os setores se alternam — ver arrangeLaneColumns.
- * Só entra em ação com 2+ setores distintos — um único setor não precisa de raia.
+ * Sentido do fluxo que combina com a orientação das raias: raias verticais
+ * (colunas) com fluxo de cima para baixo; raias horizontais (faixas) com
+ * fluxo da esquerda para a direita — assim cabem mesmo quando os setores se
+ * alternam ao longo do fluxo.
  */
-export function buildSectorContainers(nodes: Node[], direction: 'TB' | 'LR' = 'TB'): Node[] {
-  const groups = groupNodesByDepartment(nodes);
-  const boxes = computeSectorBoxes(groups);
-  if (boxes.length < 2) return nodes;
+export const flowDirectionFor = (orientation: LaneOrientation): 'TB' | 'LR' => (orientation === 'horizontal' ? 'LR' : 'TB');
 
+/**
+ * As raias na orientação escolhida cabem neste sentido de fluxo? Sempre no
+ * sentido que combina (flowDirectionFor). No outro, só quando os setores
+ * aparecem em sequência ao longo do fluxo (cada um ocupa um trecho).
+ */
+export function lanesFit(nodes: Node[], direction: 'TB' | 'LR' = 'TB', orientation: LaneOrientation = 'vertical'): boolean {
+  if (flowDirectionFor(orientation) === direction) return true;
+  const boxes = computeSectorBoxes(groupNodesByDepartment(nodes));
+  return boxes.length < 2 || sectorsAreSequential(boxes, direction);
+}
+
+/** Compatibilidade: raias verticais cabem neste sentido? */
+export const verticalLanesFit = (nodes: Node[], direction: 'TB' | 'LR' = 'TB') => lanesFit(nodes, direction, 'vertical');
+
+/**
+ * Setores em sequência ao longo do fluxo: uma faixa por trecho, encostadas,
+ * atravessando o fluxo inteiro (horizontais no fluxo de cima para baixo;
+ * verticais no da esquerda para a direita). As etapas não saem do lugar.
+ */
+function sequentialStripes(nodes: Node[], boxes: SectorBox[], direction: 'TB' | 'LR'): Node[] {
   const isTB = direction !== 'LR';
-  const sequential = sectorsAreSequential(boxes, direction);
-  if (!sequential) return arrangeLaneColumns(nodes, direction);
-
-  const sorted = [...boxes].sort((a, b) => (isTB ? a.minY - b.minY : a.minX - b.minX));
-
-  const globalMinX = Math.min(...boxes.map((b) => b.minX));
-  const globalMaxX = Math.max(...boxes.map((b) => b.maxX));
-  const globalMinY = Math.min(...boxes.map((b) => b.minY));
-  const globalMaxY = Math.max(...boxes.map((b) => b.maxY));
-
-  // Quando os setores se intercalam (viram quadro, não raia), cada um só pode
-  // ficar do tamanho do próprio conteúdo — dar a todos a largura cheia do
-  // fluxo faria quadros de setores que se sobrepõem no eixo do fluxo colidirem
-  // visualmente. Mas, dentro dessa restrição, todos ainda ganham a MESMA
-  // largura/altura no eixo perpendicular ao fluxo (a do maior setor),
-  // centralizada sobre o conteúdo de cada um — pra não ficar um quadro maior
-  // que o outro só porque um setor tem uma etapa a mais.
-  const maxCrossSpan = Math.max(...boxes.map((b) => (isTB ? b.maxX - b.minX : b.maxY - b.minY)));
-
+  // Trabalha "da esquerda para a direita": no TB troca x<->y.
+  const t = (b: SectorBox) => (isTB ? { minA: b.minY, maxA: b.maxY, minC: b.minX, maxC: b.maxX } : { minA: b.minX, maxA: b.maxX, minC: b.minY, maxC: b.maxY });
+  const sorted = [...boxes].sort((a, b) => t(a).minA - t(b).minA);
+  const cMin = Math.min(...boxes.map((b) => t(b).minC));
+  const cMax = Math.max(...boxes.map((b) => t(b).maxC));
+  const cuts = sorted.slice(0, -1).map((b, i) => (t(b).maxA + t(sorted[i + 1]).minA) / 2);
+  const before = isTB ? SECTOR_CONTAINER_TOP_PADDING : SECTOR_CONTAINER_SIDE_PADDING;
+  const after = isTB ? SECTOR_CONTAINER_BOTTOM_PADDING : SECTOR_CONTAINER_SIDE_PADDING;
+  const crossBefore = isTB ? SECTOR_CONTAINER_SIDE_PADDING : SECTOR_CONTAINER_TOP_PADDING;
+  const crossAfter = isTB ? SECTOR_CONTAINER_SIDE_PADDING : SECTOR_CONTAINER_BOTTOM_PADDING;
   const containers: Node[] = sorted.map((b, idx) => {
-    const crossCenter = isTB ? (b.minX + b.maxX) / 2 : (b.minY + b.maxY) / 2;
-    const ownCrossStart = crossCenter - maxCrossSpan / 2;
-
-    const x = sequential
-      ? (isTB ? globalMinX : b.minX) - SECTOR_CONTAINER_SIDE_PADDING
-      : (isTB ? ownCrossStart : b.minX) - SECTOR_CONTAINER_SIDE_PADDING;
-    const y = sequential
-      ? (isTB ? b.minY : globalMinY) - SECTOR_CONTAINER_TOP_PADDING
-      : (isTB ? b.minY : ownCrossStart) - SECTOR_CONTAINER_TOP_PADDING;
-    const width = sequential
-      ? (isTB ? globalMaxX - globalMinX : b.maxX - b.minX) + SECTOR_CONTAINER_SIDE_PADDING * 2
-      : (isTB ? maxCrossSpan : b.maxX - b.minX) + SECTOR_CONTAINER_SIDE_PADDING * 2;
-    const height = sequential
-      ? (isTB ? b.maxY - b.minY : globalMaxY - globalMinY) + SECTOR_CONTAINER_TOP_PADDING + SECTOR_CONTAINER_BOTTOM_PADDING
-      : (isTB ? b.maxY - b.minY : maxCrossSpan) + SECTOR_CONTAINER_TOP_PADDING + SECTOR_CONTAINER_BOTTOM_PADDING;
-
-    const node: Node = {
+    const a1 = idx === 0 ? t(b).minA - before : cuts[idx - 1];
+    const a2 = idx === sorted.length - 1 ? t(b).maxA + after : cuts[idx];
+    const c1 = cMin - crossBefore;
+    const c2 = cMax + crossAfter;
+    return {
       id: `sector_${idx}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      type: sequential ? 'swimlane' : 'frame',
-      position: { x, y },
+      type: 'swimlane',
+      position: isTB ? { x: c1, y: a1 } : { x: a1, y: c1 },
       // zIndex tem de ser propriedade de topo do nó (não de "style") para o
-      // React Flow respeitar a ordem de empilhamento — só de style é CSS
-      // solto que a lib ignora ao decidir o que fica na frente.
+      // React Flow respeitar a ordem de empilhamento.
       zIndex: CONTAINER_BASE_Z_INDEX,
-      style: { width, height },
+      style: isTB ? { width: c2 - c1, height: a2 - a1 } : { width: a2 - a1, height: c2 - c1 },
       data: {
         label: b.dept,
+        orientation: isTB ? 'horizontal' : 'vertical',
         styleOverride: {},
         timing: { duration: 0, setupTime: 0, waitTime: 0, pauseTime: 0, otherExtraTime: 0, status: 'pending' },
         generatedByAI: true,
       },
-    };
-    return node;
+    } as Node;
   });
-
-  // Raias/quadros ficam atrás (renderizados primeiro) dos nós do processo.
+  // Raias ficam atrás (renderizadas primeiro) dos nós do processo.
   return [...containers, ...nodes];
+}
+
+/**
+ * Depois do layout automático, agrupa os nós pelo campo "department" (setor
+ * preenchido pela IA) e desenha uma RAIA por setor, na orientação escolhida
+ * para o diagrama (vertical por padrão; a mesma em todas as versões):
+ * - fluxo no sentido que combina com a orientação (flowDirectionFor): uma
+ *   faixa por setor atravessando o fluxo inteiro, cada etapa levada para a
+ *   faixa do seu setor (ver arrangeLaneColumns);
+ * - fluxo no outro sentido com setores em sequência: cada setor ocupa o seu
+ *   trecho, em faixas encostadas (ver sequentialStripes).
+ * Fluxo no outro sentido com setores alternados não comporta a orientação
+ * escolhida — quem chama reorganiza no sentido certo (ver lanesFit).
+ * Só entra em ação com 2+ setores distintos — um único setor não precisa de raia.
+ */
+export function buildSectorContainers(
+  nodes: Node[],
+  direction: 'TB' | 'LR' = 'TB',
+  orientation: LaneOrientation = 'vertical',
+): Node[] {
+  const groups = groupNodesByDepartment(nodes);
+  const boxes = computeSectorBoxes(groups);
+  if (boxes.length < 2) return nodes;
+
+  if (flowDirectionFor(orientation) === direction) return arrangeLaneColumns(nodes, direction);
+  if (sectorsAreSequential(boxes, direction)) return sequentialStripes(nodes, boxes, direction);
+  // Não comporta a orientação escolhida neste sentido: alternativa de segurança.
+  return arrangeLaneColumns(nodes, direction);
 }
 
 /**
@@ -365,7 +387,11 @@ export function buildSectorContainers(nodes: Node[], direction: 'TB' | 'LR' = 'T
  * Raias/quadros criados manualmente pelo usuário (sem essa flag) nunca são
  * tocados aqui — controle deles continua 100% manual.
  */
-export function rebuildAIContainers(nodes: Node[], direction: 'TB' | 'LR' = 'TB'): Node[] {
+export function rebuildAIContainers(
+  nodes: Node[],
+  direction: 'TB' | 'LR' = 'TB',
+  orientation: LaneOrientation = 'vertical',
+): Node[] {
   const hasAIContainer = nodes.some(
     (n) => (n.type === 'swimlane' || n.type === 'frame') && (n.data as any)?.generatedByAI === true
   );
@@ -374,5 +400,12 @@ export function rebuildAIContainers(nodes: Node[], direction: 'TB' | 'LR' = 'TB'
   const withoutOldAIContainers = nodes.filter(
     (n) => !((n.type === 'swimlane' || n.type === 'frame') && (n.data as any)?.generatedByAI === true)
   );
-  return buildSectorContainers(withoutOldAIContainers, direction);
+  return buildSectorContainers(withoutOldAIContainers, direction, orientation);
+}
+
+/** Orientação das raias geradas pela IA que já existem nestes nós (null = nenhuma). */
+export function aiLaneOrientation(nodes: Node[]): LaneOrientation | null {
+  const lane = nodes.find((n) => n.type === 'swimlane' && (n.data as any)?.generatedByAI === true);
+  if (!lane) return null;
+  return (lane.data as any)?.orientation === 'vertical' ? 'vertical' : 'horizontal';
 }

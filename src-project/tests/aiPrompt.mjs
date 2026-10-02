@@ -34,4 +34,17 @@ check('exemplo de formato não traz isDubious (a IA copiava para todas as linhas
 check('sem "máximo de detalhe sem teto"', !/NO UPPER CEILING|SEM TETO/.test(prompt));
 check('sem notes obrigatórios', !/"notes"/.test(prompt));
 
+// Geração pela IA configurada: formato compacto (só a codificação), sem
+// reduzir o fluxo; o "Gerar manualmente" continua no JSONL completo.
+{
+  const compacto = buildPrompt({ prompt: 'Recebimento.', complexities: ['detalhado'], compactOutput: true,
+    referenceVersions: { normal: { nodes: [{ id: 'n1', type: 'start', data: { label: 'Início', timing: { duration: 0, department: 'Recebimento' } } }], edges: [] } } });
+  check('prompt compacto pede o formato curto', /COMPACT ENCODING/.test(compacto) && /N\|<id>\|<type>\|<label>/.test(compacto) && !/Format to follow line by line/.test(compacto));
+  check('prompt compacto proíbe reduzir o fluxo', /NEVER reduce, merge or skip steps/.test(compacto) && /FULL detail/.test(compacto));
+  check('prompt compacto mantém as regras (setores, decisões, tempo total)', /OBRIGATÓRIO em TODOS os nós/.test(compacto) && /CRITICAL DECISION RULE/.test(compacto) && /TIME PRESERVATION/.test(compacto));
+  check('versões já geradas vão como referência curta', /VERSÕES JÁ GERADAS/.test(compacto) && /V\|normal\nN\|n1\|start\|Início\|0\|Recebimento/.test(compacto));
+  const manual = buildPrompt({ prompt: 'Recebimento.', complexities: ['simples', 'normal', 'detalhado'], manualMode: true });
+  check('"Gerar manualmente": prompt completo em JSONL, sem formato compacto', /JSON Lines format \(JSONL\)/.test(manual) && !/COMPACT ENCODING/.test(manual) && /\[simples, normal, detalhado\]/.test(manual));
+}
+
 console.log(R.join('\n'));

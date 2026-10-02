@@ -173,4 +173,29 @@ check('o ponto de partida fica na borda direita do círculo, na altura do centro
   check('sem setores o arquivo continua sem raias', diagramXml.includes('<Lanes />') && !diagramXml.includes('LaneId='));
 }
 
+// Raias VERTICAIS no site (uma coluna por setor, fluxo de cima para baixo):
+// no Bizagi viram raias horizontais (desenho girado), uma por setor.
+{
+  const col = (id, type, x, y, dept) => ({ id, type, position: { x, y }, data: { label: id, timing: { department: dept } } });
+  const lane = (label, x) => ({ id: 'L' + label, type: 'swimlane', position: { x, y: -60 }, style: { width: 300, height: 900 }, data: { label, orientation: 'vertical', generatedByAI: true } });
+  const nos = [
+    lane('Recebimento', -48), lane('Estoque', 252), lane('Financeiro', 552),
+    col('Inicio', 'start', 0, 0, 'Recebimento'), col('Conferir', 'process', 0, 150, 'Recebimento'),
+    col('Armazenar', 'process', 300, 300, 'Estoque'), col('Conferir Saldo', 'process', 0, 450, 'Recebimento'),
+    col('Lancar', 'process', 600, 600, 'Financeiro'), col('Fim', 'end', 600, 750, 'Financeiro'),
+  ];
+  const lig = [['Inicio', 'Conferir'], ['Conferir', 'Armazenar'], ['Armazenar', 'Conferir Saldo'], ['Conferir Saldo', 'Lancar'], ['Lancar', 'Fim']]
+    .map(([a, b], i) => ({ id: 'v' + i, source: a, target: b, data: {} }));
+  const bv = await generateBizagiBpm(nos, lig, 'Raias Verticais');
+  const zv = await JSZip.loadAsync(Buffer.from(await bv.arrayBuffer()));
+  const dv = await JSZip.loadAsync(await zv.file(Object.keys(zv.files).find((n) => n.endsWith('.diag'))).async('nodebuffer'));
+  const xv = await dv.file('Diagram.xml').async('string');
+  const pv = [...xv.matchAll(/<Pool Id="([^"]+)" Name="([^"]*)"[^>]*>([\s\S]*?)<\/Pool>/g)].find((p) => p[2] === 'Raias Verticais');
+  const lv = [...pv[3].matchAll(/<Lane Id="([^"]+)" Name="([^"]*)"[\s\S]*?Height="(\d+)" Width="(\d+)"[^>]*><Coordinates XCoordinate="(\d+)" YCoordinate="(\d+)"/g)].map((m) => ({ id: m[1], name: m[2], h: +m[3], y: +m[6] }));
+  check('raias verticais do site: uma raia por setor no Bizagi', lv.map((l) => l.name).sort().join() === 'Estoque,Financeiro,Recebimento', lv.map((l) => l.name).join(','));
+  const shape = (name) => { const m = new RegExp(`<Activity Id="[^"]+" Name="${name}">[\\s\\S]*?LaneId="([^"]+)" Height="(\\d+)"[^>]*><Coordinates XCoordinate="(-?\\d+)" YCoordinate="(-?\\d+)"`).exec(xv); return m && { lane: lv.find((l) => l.id === m[1]), h: +m[2], y: +m[4] }; };
+  const ok = [['Conferir', 'Recebimento'], ['Armazenar', 'Estoque'], ['Conferir Saldo', 'Recebimento'], ['Lancar', 'Financeiro']].every(([n, d]) => { const s = shape(n); return s && s.lane?.name === d && s.y >= s.lane.y && s.y + s.h <= s.lane.y + s.lane.h; });
+  check('cada forma na raia do seu setor e dentro dela', ok);
+}
+
 console.log(R.join('\n'));

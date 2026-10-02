@@ -86,7 +86,9 @@ import {
   ChevronsUp,
   ChevronsDown,
   FolderOpen,
-  Eraser
+  Eraser,
+  Columns3,
+  Rows3
 } from 'lucide-react';
 
 import { customNodeTypes, getNodeDimensions, pickBoxStyle } from './CustomNodes';
@@ -94,7 +96,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments, lanesFit, flowDirectionFor, aiLaneOrientation, LaneOrientation } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { NavigationModeContext } from '../lib/navigationMode';
 import { applyGeneratedJsonlLine, parseGeneratedBlock, repairGeneratedVersion, fixDecisionExits } from '../utils/aiGenerationParser';
@@ -516,6 +518,12 @@ function AlignmentGuidesOverlay({ guides }: { guides: AlignmentGuidesState }) {
   );
 }
 
+/** Preferência de orientação das raias para diagramas NOVOS (a de cada diagrama fica nele). */
+const LANE_ORIENTATION_PREF_KEY = 'labirinto_lane_orientation_v1';
+const loadLaneOrientationPref = (): LaneOrientation => {
+  try { return localStorage.getItem(LANE_ORIENTATION_PREF_KEY) === 'horizontal' ? 'horizontal' : 'vertical'; } catch { return 'vertical'; }
+};
+
 /** Nada para limpar no alcance escolhido? (etapas ou ligações soltas contam) */
 const scopeIsEmpty = (scope: 'todas' | 'atual', totalAll: number, current: number, activeV?: { edges?: any[] }): boolean =>
   scope === 'todas' ? totalAll === 0 : current === 0 && !(activeV?.edges?.length);
@@ -723,6 +731,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     [versions],
   );
   const [showExtraVersions, setShowExtraVersions] = useState(false);
+  // Orientação das raias deste diagrama (vale para todas as versões).
+  const [laneOrientation, setLaneOrientation] = useState<LaneOrientation>(() => loadLaneOrientationPref());
   const [extraTargets, setExtraTargets] = useState<Record<string, string>>({});
 
   // Sem nuvem: o compartilhamento é feito pelo arquivo .json
@@ -748,6 +758,14 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       
       if (data.showTimingMode !== undefined) {
         setShowTimingMode(data.showTimingMode);
+      }
+
+      // Raias: a orientação com que o diagrama começou vale para sempre
+      // nele (salva no diagrama; diagramas antigos: a das raias que já têm).
+      {
+        const saved = (data as any).laneOrientation as LaneOrientation | undefined;
+        const fromLanes = Object.values(data.versions || {}).map((v: any) => aiLaneOrientation(v?.nodes || [])).find(Boolean) as LaneOrientation | undefined;
+        setLaneOrientation(saved === 'vertical' || saved === 'horizontal' ? saved : fromLanes || loadLaneOrientationPref());
       }
 
       const rawVersions = data.versions || { normal: { nodes: data.nodes || [], edges: data.edges || [] } };
@@ -2313,6 +2331,60 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     [liveVersions, extraTargets, activeVersion, pushHistory, saveToCloud, fitView, setNodes, setEdges],
   );
 
+  const isAILane = (n: Node) => (n.type === 'swimlane' || n.type === 'frame') && (n.data as any)?.generatedByAI === true;
+
+  /** Refaz o layout de uma versão com as raias da IA na orientação pedida. */
+  const relayoutWithLanes = (vNodes: Node[], vEdges: Edge[], o: LaneOrientation) => {
+    const stripped = vNodes.filter((n) => !isAILane(n));
+    const dir = flowDirectionFor(o);
+    const { nodes: lN, edges: lE } = getLayoutedElements(stripped, vEdges, dir);
+    const withLanes = buildSectorContainers(lN as Node[], dir, o);
+    const routed = recomputeEdgeRoutingForNodes(lE as Edge[], withLanes, new Set(withLanes.map((n) => n.id)));
+    return { nodes: withLanes, edges: routed };
+  };
+
+  /** Guarda a orientação no diagrama (e como preferência para os próximos). */
+  const persistLaneOrientation = (o: LaneOrientation) => {
+    setLaneOrientation(o);
+    try { localStorage.setItem(LANE_ORIENTATION_PREF_KEY, o); } catch { /* sem localStorage */ }
+    const data = getLocalDiagram(diagramId);
+    if (data && (data as any).laneOrientation !== o) {
+      (data as any).laneOrientation = o;
+      saveLocalDiagram(data);
+    }
+  };
+
+  /** Troca a orientação das raias e refaz as raias da IA em TODAS as versões. */
+  const applyLaneOrientation = useCallback(
+    (o: LaneOrientation) => {
+      persistLaneOrientation(o);
+      const nome = o === 'vertical' ? 'verticais' : 'horizontais';
+      const current = liveVersions();
+      const next: typeof versions = { ...current };
+      let changed = 0;
+      Object.keys(next).forEach((k) => {
+        const v = next[k];
+        if (!v?.nodes?.some(isAILane)) return;
+        next[k] = { ...v, ...relayoutWithLanes(v.nodes as Node[], v.edges as Edge[], o), viewport: undefined };
+        changed++;
+      });
+      if (!changed) {
+        showToast({ message: `Raias ${nome}: as raias geradas pela IA neste diagrama vão sair nessa orientação.`, timeout: 6000 });
+        return;
+      }
+      const shown = next[activeVersion] || { nodes: [], edges: [] };
+      setVersions(next);
+      setNodes(shown.nodes as Node[]);
+      setEdges(shown.edges as Edge[]);
+      pushHistory(shown.nodes as Node[], shown.edges as Edge[], `Raias ${nome}`);
+      saveToCloud(activeVersion, shown.nodes as Node[], shown.edges as Edge[], next);
+      setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 80);
+      showToast({ message: `Raias ${nome} aplicadas em ${changed === 1 ? '1 versão' : `${changed} versões`} deste diagrama.`, timeout: 6000 });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [liveVersions, activeVersion, pushHistory, saveToCloud, fitView, setNodes, setEdges, diagramId],
+  );
+
   const applyImportChoices = useCallback(
     (choices: { source: ImportSource; mode: ImportMode }[]) => {
       const file = importFile;
@@ -2664,13 +2736,27 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, []);
 
   // Auto Layout using Dagre
-  const applyAutoLayout = (direction: 'TB' | 'LR' = 'TB') => {
-    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, direction);
+  const applyAutoLayout = (requested: 'TB' | 'LR' = 'TB') => {
+    // As raias da IA mantêm a orientação do diagrama: se o sentido pedido
+    // não as comporta (setores que se alternam), organiza no sentido delas.
+    let direction = requested;
+    let { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, direction);
+    const hasAILanes = nodes.some(isAILane);
+    if (hasAILanes && !lanesFit(layoutedNodes, direction, laneOrientation)) {
+      direction = flowDirectionFor(laneOrientation);
+      ({ nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(nodes, edges, direction));
+      showToast({
+        message: laneOrientation === 'vertical'
+          ? 'As raias deste diagrama são verticais: o fluxo foi organizado de cima para baixo para manter as raias.'
+          : 'As raias deste diagrama são horizontais: o fluxo foi organizado da esquerda para a direita para manter as raias.',
+        timeout: 8000,
+      });
+    }
     // O dagre reposiciona os nós de processo sem saber que existem
     // raias/quadros gerados pela IA ao redor deles — reconstrói essas
     // raias/quadros (só os da IA; os manuais do usuário ficam intocados)
     // pra continuarem envolvendo as atividades certas, sem sobrepor.
-    const finalNodes = rebuildAIContainers(layoutedNodes, direction);
+    const finalNodes = rebuildAIContainers(layoutedNodes, direction, laneOrientation);
     const finalEdges = finalNodes === layoutedNodes
       ? layoutedEdges
       : recomputeEdgeRoutingForNodes(layoutedEdges, finalNodes, new Set(finalNodes.map((n) => n.id)));
@@ -2684,8 +2770,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // Align and Distribute Tools
   const alignSelectedNodes = (type: 'center-x' | 'center-y' | 'left' | 'right' | 'top' | 'bottom' | 'distribute-v' | 'distribute-h' | 'straighten-all') => {
     if (type === 'straighten-all') {
-      const { nodes: lNodes, edges: lEdges } = getLayoutedElements(nodes, edges, 'TB');
-      const finalNodes = rebuildAIContainers(lNodes, 'TB');
+      const straightenDir = nodes.some(isAILane) ? flowDirectionFor(laneOrientation) : 'TB';
+      const { nodes: lNodes, edges: lEdges } = getLayoutedElements(nodes, edges, straightenDir);
+      const finalNodes = rebuildAIContainers(lNodes, straightenDir, laneOrientation);
       const finalEdges = finalNodes === lNodes
         ? lEdges
         : recomputeEdgeRoutingForNodes(lEdges, finalNodes, new Set(finalNodes.map((n) => n.id)));
@@ -3007,14 +3094,19 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         anyTimingGenerated = true;
       }
 
+      // Com 2+ setores o sentido do fluxo segue a orientação das raias do
+      // diagrama (verticais: de cima para baixo; horizontais: para a direita).
+      const deptCount = new Set(sanitized.nodes.map((n) => String((n.data as any)?.timing?.department || '').trim()).filter(Boolean)).size;
+      const layoutDir = deptCount >= 2 ? flowDirectionFor(laneOrientation) : 'TB';
       const { nodes: lNodes, edges: lEdges } = getLayoutedElements(
         sanitized.nodes,
-        sanitized.edges
+        sanitized.edges,
+        layoutDir
       );
       // Etapa sem setor num fluxo com setores herda o do vizinho — assim
       // nenhuma fica fora das raias.
       const withDepartments = fillMissingDepartments(lNodes, lEdges);
-      const nodesWithSectors = buildSectorContainers(withDepartments, 'TB');
+      const nodesWithSectors = buildSectorContainers(withDepartments, layoutDir, laneOrientation);
       // As raias podem levar etapas para a coluna do seu setor: as linhas
       // são recalculadas para a nova posição (sem ficarem em diagonal).
       const routedEdges = recomputeEdgeRoutingForNodes(lEdges, nodesWithSectors, new Set(nodesWithSectors.map((n) => n.id)));
@@ -3099,6 +3191,19 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const geradas = selectedComplexities.filter(c => layoutedGenerated[c]?.nodes?.length);
       if (geradas.length && !geradas.includes(newActiveVersionKey)) newActiveVersionKey = geradas.includes('normal') ? 'normal' : geradas[0];
     }
+
+    // Mesma orientação de raias em todas as versões do diagrama: versões que
+    // não receberam conteúdo novo agora (não pedidas, ou pedidas e que a IA
+    // não enviou), com raias da IA na outra orientação, são refeitas.
+    persistLaneOrientation(laneOrientation);
+    Object.keys(updatedVersions).forEach((k) => {
+      if (mode === 'replace' && layoutedGenerated[k]?.nodes?.length) return;
+      const v = updatedVersions[k];
+      const o = aiLaneOrientation((v?.nodes || []) as Node[]);
+      if (o && o !== laneOrientation) {
+        updatedVersions[k] = { ...v, ...relayoutWithLanes(v.nodes as Node[], v.edges as Edge[], laneOrientation), viewport: undefined };
+      }
+    });
 
     setVersions(updatedVersions);
     setActiveVersion(newActiveVersionKey);
@@ -3198,48 +3303,58 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         return out;
       };
 
+      // A resposta com as 3 versões de uma vez passava do limite de tamanho
+      // do provedor e chegava cortada (sem ligações, ou sem a "detalhado").
+      // Agora: UMA versão por pedido, no formato compacto (ver
+      // lib/compactFormat — o app converte de volta, o resultado é o mesmo),
+      // começando pela mais detalhada; as seguintes recebem as anteriores
+      // como referência (mesmo processo, setores e tempo total). Versão que
+      // vier vazia ou cortada (etapas sem nenhuma ligação) é pedida de novo
+      // uma vez. O "Gerar manualmente" continua sem nenhum limite.
       const rawGenerated = emptyBuckets(selectedComplexities);
-      await streamInto({
-        prompt: deriveFromExisting ? "" : prompt,
-        complexities: selectedComplexities,
-        existingVersions: deriveFromExisting ? { [sourceVersion]: versions[sourceVersion] } : undefined,
-        sourceVersion: deriveFromExisting ? sourceVersion : undefined,
-        appendMode: mode === 'append',
-        allowedShapeTypes,
-        files,
-      }, rawGenerated);
+      const order = ['detalhado', 'normal', 'simples'].filter(c => selectedComplexities.includes(c));
+      selectedComplexities.forEach(c => { if (!order.includes(c)) order.push(c); });
+      const label = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
+      const looksCut = (b?: { nodes: Node[]; edges: Edge[] }) =>
+        !b || b.nodes.length === 0 || (b.nodes.length > 1 && b.edges.length === 0);
 
-      // A IA escreve as versões em sequência e a "detalhado" (a maior) vem
-      // por último: com arquivo anexado a resposta fica longa e às vezes
-      // termina antes de chegar nela. Pede de novo SÓ o que faltou, com o
-      // mesmo texto/arquivo e as versões já geradas como referência (mesmo
-      // processo e mesmo tempo total).
-      const missing = selectedComplexities.filter(c => (rawGenerated[c]?.nodes?.length || 0) === 0);
-      const generatedOk = selectedComplexities.filter(c => (rawGenerated[c]?.nodes?.length || 0) > 0);
-      if (missing.length > 0 && !aiAbortControllerRef.current?.signal.aborted) {
-        const label = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
-        showToast({ message: `A IA não enviou a versão ${missing.map(label).join(', ')}. Gerando essa versão separadamente...`, timeout: 8000 });
-        setProgress(60);
-        const retry = emptyBuckets(missing);
-        const reference: Record<string, any> = {};
-        generatedOk.forEach(c => { reference[c] = rawGenerated[c]; });
-        if (deriveFromExisting && versions[sourceVersion]) reference[sourceVersion] = versions[sourceVersion];
-        try {
-          await streamInto({
-            prompt: deriveFromExisting ? "" : prompt,
-            complexities: missing,
-            existingVersions: Object.keys(reference).length ? reference : undefined,
-            sourceVersion: deriveFromExisting ? sourceVersion : undefined,
-            appendMode: mode === 'append',
-            allowedShapeTypes,
-            files,
-          }, retry);
-          missing.forEach(c => { if (retry[c]?.nodes?.length) rawGenerated[c] = retry[c]; });
-        } catch (retryErr: any) {
-          if (retryErr?.name === 'AbortError') throw retryErr;
-          console.error('Nova tentativa da versão que faltou falhou:', retryErr);
+      for (let i = 0; i < order.length; i++) {
+        const c = order[i];
+        if (aiAbortControllerRef.current?.signal.aborted) break;
+        setProgress(Math.round(10 + (80 * i) / order.length));
+        const reference: Record<string, { nodes: Node[]; edges: Edge[] }> = {};
+        order.slice(0, i).forEach(prev => { if (rawGenerated[prev]?.nodes?.length) reference[prev] = rawGenerated[prev]; });
+        const body = {
+          prompt: deriveFromExisting ? "" : prompt,
+          complexities: [c],
+          existingVersions: deriveFromExisting ? { [sourceVersion]: versions[sourceVersion] } : undefined,
+          sourceVersion: deriveFromExisting ? sourceVersion : undefined,
+          referenceVersions: Object.keys(reference).length ? reference : undefined,
+          appendMode: mode === 'append',
+          allowedShapeTypes,
+          files,
+          compactOutput: true,
+        };
+
+        for (let tentativa = 1; tentativa <= 2; tentativa++) {
+          const bucket = emptyBuckets([c]);
+          try {
+            await streamInto(body, bucket);
+          } catch (e: any) {
+            if (e?.name === 'AbortError') throw e;
+            // Erro só desta versão: as outras seguem; sem nenhuma, o erro sobe.
+            if (tentativa === 2 && !order.some(o => rawGenerated[o]?.nodes?.length)) throw e;
+            console.error(`Falha ao gerar a versão ${c}:`, e);
+          }
+          const melhor = (bucket[c]?.nodes?.length || 0) >= (rawGenerated[c]?.nodes?.length || 0);
+          if (bucket[c]?.nodes?.length && (melhor || looksCut(rawGenerated[c]))) rawGenerated[c] = bucket[c];
+          if (!looksCut(rawGenerated[c]) || aiAbortControllerRef.current?.signal.aborted) break;
+          if (tentativa === 1) {
+            showToast({ message: `A resposta da versão ${label(c)} veio incompleta (passou do limite de tamanho). Pedindo de novo...`, timeout: 7000 });
+          }
         }
       }
+      setProgress(95);
 
       finalizeGeneratedContent(rawGenerated, mode);
     } catch (err: any) {
@@ -4130,9 +4245,35 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             {showAlignMenu && (
               <>
                 <div className="fixed inset-0 z-40 bg-transparent" onClick={() => setShowAlignMenu(false)} />
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-zinc-200 rounded-2xl shadow-2xl overflow-hidden p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="absolute right-0 top-full mt-2 w-64 max-sm:fixed max-sm:left-2 max-sm:right-2 max-sm:top-24 max-sm:w-auto max-sm:max-h-[calc(100vh-7rem)] max-sm:overflow-y-auto bg-white border border-zinc-200 rounded-2xl shadow-2xl overflow-hidden p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
                   <div className="px-2 py-1 mb-1">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Alinhamento Inteligente</span>
+                  </div>
+
+                  <div className="px-2 py-1">
+                    <span className="text-[10px] font-medium text-zinc-400">Raias por setor (todas as versões):</span>
+                  </div>
+                  <div className="px-1 mb-1.5">
+                  <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Orientação das raias" data-menu-lane-orientation>
+                {(['vertical', 'horizontal'] as const).map((o) => (
+                  <button
+                    key={o}
+                    type="button"
+                    role="radio"
+                    aria-checked={laneOrientation === o}
+                    onClick={() => { if (laneOrientation !== o) applyLaneOrientation(o); setShowAlignMenu(false); }}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                      laneOrientation === o
+                        ? 'border-blue-600 bg-blue-50/60 text-blue-700 font-bold'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100'
+                    }`}
+                    data-lane-orientation={o}
+                  >
+                    {o === 'vertical' ? <Columns3 size={14} /> : <Rows3 size={14} />}
+                    {o === 'vertical' ? 'Verticais' : 'Horizontais'}
+                  </button>
+                ))}
+              </div>
                   </div>
 
                   <button
@@ -5081,6 +5222,35 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               </div>
             </div>
 
+            <div className="mb-4">
+              <label className="text-xs font-bold text-zinc-700 uppercase tracking-wider block mb-1">
+                Raias por setor:
+              </label>
+              <p className="text-[11px] text-zinc-500 mb-2">
+                Quando houver setores diferentes. Vale para todas as versões deste diagrama.
+              </p>
+              <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Orientação das raias" data-ai-lane-orientation>
+                {(['vertical', 'horizontal'] as const).map((o) => (
+                  <button
+                    key={o}
+                    type="button"
+                    role="radio"
+                    aria-checked={laneOrientation === o}
+                    onClick={() => persistLaneOrientation(o)}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                      laneOrientation === o
+                        ? 'border-blue-600 bg-blue-50/60 text-blue-700 font-bold'
+                        : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100'
+                    }`}
+                    data-lane-orientation={o}
+                  >
+                    {o === 'vertical' ? <Columns3 size={14} /> : <Rows3 size={14} />}
+                    {o === 'vertical' ? 'Verticais' : 'Horizontais'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mb-5">
               <label className="text-xs font-bold text-zinc-700 uppercase tracking-wider block mb-2">
                 Descrição do Processo ou Anexos:
@@ -5300,7 +5470,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               </div>
             )}
 
-            <div className="flex items-center justify-between gap-3 mt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
               <button
                 onClick={openManualAIModal}
                 title="Sem chave de IA cadastrada aqui? Copie um prompt pronto para colar em qualquer chat de IA e cole a resposta de volta. Pode abrir mesmo sem escrever nada aqui, se for só anexar um arquivo direto no chat."
@@ -5309,7 +5479,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
                 <ClipboardPaste size={14} />
                 Gerar Manualmente
               </button>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 ml-auto">
                 <button
                   onClick={requestCloseAIModal}
                   className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-xl transition-colors"

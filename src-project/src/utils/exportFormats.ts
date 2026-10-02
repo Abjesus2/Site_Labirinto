@@ -352,10 +352,26 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
   const idMap = new Map<string, string>();
   flowNodes.forEach((n) => idMap.set(n.id, uuid()));
 
+  // Raias verticais no site (uma coluna por setor, fluxo de cima para
+  // baixo): no Bizagi as raias são faixas horizontais, então o desenho é
+  // girado — o fluxo vai da esquerda para a direita e cada coluna vira uma
+  // raia. Sem isso todas as colunas caíam numa raia só ("A / B / C").
+  const containersAll = nodes.filter((n) => n.type === 'swimlane' || n.type === 'frame');
+  const verticalLanes = containersAll.some(
+    (c) => c.type === 'swimlane' && (c.data?.orientation === 'vertical' || c.data?.styleOverride?.orientation === 'vertical'),
+  );
+  const geomBox = (n: any) => {
+    const b = getNodeBox(n);
+    if (!verticalLanes) return b;
+    const cx = b.x + b.width / 2;
+    const cy = b.y + b.height / 2;
+    return { x: cy - b.width / 2, y: cx - b.height / 2, width: b.width, height: b.height };
+  };
+
   // Geometria nativa do Bizagi (tamanhos, área do texto e setas
   // recalculadas) — ver utils/bizagiLayout.ts.
   const geom = computeBizagiGeometry(
-    flowNodes.map((n) => ({ id: n.id, type: n.type, box: getNodeBox(n) })),
+    flowNodes.map((n) => ({ id: n.id, type: n.type, box: geomBox(n) })),
     edges.map((e) => ({ id: e.id, source: e.source, target: e.target, label: e.label })),
   );
 

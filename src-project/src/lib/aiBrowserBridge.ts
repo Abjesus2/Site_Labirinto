@@ -8,6 +8,7 @@
  */
 
 import { setAlertActionResolver, showToast } from './embedCompat';
+import { compactFormatInstructions, compactStreamToJsonl, compactTextToJsonl, toCompactReference } from './compactFormat';
 import { openAISettings } from './aiSettingsUI';
 import {
   applyImportedConfig,
@@ -33,7 +34,7 @@ const ENDPOINT_PATH = '/api/generate-diagram';
  * texto e cola num chat de IA qualquer, em vez de cadastrar uma chave aqui).
  */
 export const buildPrompt = (body: any): string => {
-  const { prompt, complexities, existingVersions, appendMode, allowedShapeTypes, files, manualMode } = body || {};
+  const { prompt, complexities, existingVersions, appendMode, allowedShapeTypes, files, manualMode, compactOutput, referenceVersions } = body || {};
 
   const compList = (complexities || ['normal']).join(', ');
   const allowedList =
@@ -79,6 +80,12 @@ export const buildPrompt = (body: any): string => {
     )}\n\nUse this existing flowchart data as the definitive source of truth to generate the missing versions or improve the requested versions.`;
   }
 
+  // Geração em partes (uma versão por pedido, para a resposta não passar do
+  // limite): as versões já geradas vão como referência, em formato curto.
+  if (referenceVersions && Object.keys(referenceVersions).length > 0) {
+    contextStr += `\n\nVERSÕES JÁ GERADAS NESTA MESMA GERAÇÃO (referência, formato compacto V/N/E):\n${toCompactReference(referenceVersions)}\n\nGere AGORA somente a(s) versão(ões) [${compList}], do MESMO processo: mesmos setores ("department" com os mesmos nomes), mesma sequência geral e o MESMO tempo total (soma de duration + setupTime + waitTime) das versões acima — mudando só o nível de detalhe.`;
+  }
+
   if (appendMode) {
     contextStr += `\n\nAPPEND MODE IS ON: The user wants to add new steps to the existing diagram without replacing it. YOU MUST USE GLOBALLY UNIQUE IDs for all new nodes and edges (e.g., prefixing with "new_" or a random string like "n_abc123") so they do not conflict with the existing IDs provided above.`;
   }
@@ -86,7 +93,7 @@ export const buildPrompt = (body: any): string => {
   return `You are a real-time flowchart generation AI.
         Based on the user's prompt or existing flowcharts/files, generate the versions: [${compList}].
         
-        CRITICAL: Your output MUST be strictly in JSON Lines format (JSONL).
+${compactOutput ? compactFormatInstructions(compList) + '\n\n' : `        CRITICAL: Your output MUST be strictly in JSON Lines format (JSONL).
         Each line MUST be a single valid JSON object. DO NOT output any markdown (like \`\`\`json) or standard text.
         
         Format to follow line by line:
@@ -99,7 +106,7 @@ export const buildPrompt = (body: any): string => {
         ...
         {"progress": 100}
         
-        CRITICAL SHAPE RULE: The "type" of every node MUST be strictly one of the allowed node types: [${allowedStr}]. Do NOT invent or use unlisted shape types.
+`}        CRITICAL SHAPE RULE: The "type" of every node MUST be strictly one of the allowed node types: [${allowedStr}]. Do NOT invent or use unlisted shape types.
 
         CRITICAL DECISION RULE: todo nó 'decision' (losango de pergunta) SEMPRE sai com pelo menos duas arestas rotuladas, uma para cada desfecho — o par padrão é "Sim" e "Não". Nunca gere um losango com uma única saída.
 
@@ -276,13 +283,17 @@ const generateDiagram = async (body: any, signal?: AbortSignal | null): Promise<
         continue;
       }
 
+      // Resposta no formato compacto: volta para o JSONL de sempre.
+      const compact = body?.compactOutput === true;
+      const asJsonl = (text: string) => (compact ? compactTextToJsonl(text) : text);
       if (req.kind === 'text') {
-        return new Response(textToStream(await res.text()), { status: 200 });
+        return new Response(textToStream(asJsonl(await res.text())), { status: 200 });
       }
       if (!attempt.stream || !res.body) {
-        return new Response(textToStream(extractWholeText(req.kind, await res.json())), { status: 200 });
+        return new Response(textToStream(asJsonl(extractWholeText(req.kind, await res.json()))), { status: 200 });
       }
-      return new Response(streamToText(req.kind, res.body), {
+      const textStream = streamToText(req.kind, res.body);
+      return new Response(compact ? compactStreamToJsonl(textStream) : textStream, {
         status: 200,
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
       });

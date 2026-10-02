@@ -617,31 +617,42 @@ export const streamToText = (
   let buffer = '';
 
   return new ReadableStream<Uint8Array>({
+    // Continua lendo até ter algum texto para entregar: um pedaço que não
+    // fecha nenhuma linha (ou só traz "keep-alive") não pode encerrar o
+    // "pull" sem entregar nada — o stream ficava parado e a geração só
+    // terminava no vigia de 30 s ("a IA parou de responder").
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      if (kind === 'text') {
-        controller.enqueue(value);
-        return;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const raw of lines) {
-        const line = raw.trim();
-        if (!line || line.startsWith('event:') || line.startsWith(':')) continue;
-        const payload = line.startsWith('data:') ? line.slice(5).trim() : line;
-        if (!payload || payload === '[DONE]') continue;
-        try {
-          const text = extractDelta(kind, JSON.parse(payload));
-          if (text) controller.enqueue(encoder.encode(text));
-        } catch {
-          /* fragmento incompleto */
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
         }
+        if (kind === 'text') {
+          controller.enqueue(value);
+          return;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        let delivered = false;
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line || line.startsWith('event:') || line.startsWith(':')) continue;
+          const payload = line.startsWith('data:') ? line.slice(5).trim() : line;
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const text = extractDelta(kind, JSON.parse(payload));
+            if (text) {
+              controller.enqueue(encoder.encode(text));
+              delivered = true;
+            }
+          } catch {
+            /* fragmento incompleto */
+          }
+        }
+        if (delivered) return;
       }
     },
     cancel(reason) {

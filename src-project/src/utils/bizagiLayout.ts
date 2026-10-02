@@ -442,7 +442,10 @@ export interface BizagiLane {
  * Só para fluxo de cima para baixo e com 2+ setores; senão devolve [].
  */
 export function computeBizagiLanes(geom: BizagiGeometry, deptById: Map<string, string>): BizagiLane[] {
-  if (geom.direction !== 'TB') return [];
+  // Raias são faixas horizontais. De cima para baixo: setores em sequência.
+  // Da esquerda para a direita (inclusive raias verticais do site, giradas
+  // na exportação): setores em faixas de altura — se se misturarem na
+  // altura, viram uma faixa só e, sobrando só uma, nenhuma raia.
   const distinct = new Set([...deptById.values()].map((d) => d.trim()).filter(Boolean));
   if (distinct.size < 2) return [];
 
