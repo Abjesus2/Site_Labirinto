@@ -91,7 +91,7 @@ export const buildPrompt = (body: any): string => {
         
         Format to follow line by line:
         {"progress": 10}
-        {"version": "simples", "node": {"id": "n1", "label": "Início do Processo", "type": "start", "duration": 0}}
+        {"version": "simples", "node": {"id": "n1", "label": "Início do Processo", "type": "start", "duration": 0, "department": "Atendimento"}}
         {"version": "simples", "node": {"id": "n2", "label": "Triagem e Validação", "type": "process", "duration": 15, "setupTime": 2, "department": "Atendimento"}}
         {"version": "simples", "edge": {"id": "e1", "source": "n1", "target": "n2"}}
         {"progress": 50}
@@ -139,12 +139,15 @@ export const buildPrompt = (body: any): string => {
         - O texto do losango deve ser uma PERGUNTA fechada, terminando com "?" (ex.: "Documentação está completa?"). Se não der para responder com o par de rótulos escolhido, reescreva a pergunta.
         - Cada saída precisa levar a algum lugar: nenhuma ponta solta. O caminho negativo normalmente volta para a etapa de correção anterior ou segue para um tratamento de exceção.
 
-        3.2. SETORES, ÁREAS OU DEPARTAMENTOS DIFERENTES (RAIAS E QUADROS) — CRITICAL:
-        - Se o processo atravessa mais de um setor, departamento, equipe, sistema ou área física responsável (ex.: "Atendimento" entrega para "Estoque", que entrega para "Financeiro"; ou "Cliente" x "Sistema" x "Equipe Interna"), preencha o campo "department" de CADA nó com o nome curto de quem executa aquela etapa.
-        - "department" precisa ser curto (2 a 4 palavras, ex.: "Vendas", "Financeiro", "Logística", "Cliente", "Sistema Externo") porque o app usa esse texto como título da raia/quadro desenhado ao redor das etapas daquele setor.
-        - Use exatamente o MESMO texto em todas as etapas do mesmo setor — não varie o nome do mesmo grupo (não misture "TI" com "Tecnologia da Informação", por exemplo).
-        - O aplicativo desenha automaticamente a raia ou o quadro ao redor de cada setor identificado, depois de gerar o diagrama. Por isso você NUNCA deve gerar nós do tipo "swimlane" ou "frame" — mesmo que apareçam na lista de formas permitidas, esses dois tipos são reservados para uso manual do usuário depois, não para geração por IA.
-        - Se o processo inteiro acontece dentro de um único setor/departamento/área, deixe "department" vazio ("") em todos os nós — nesse caso nenhuma raia é desenhada.
+        3.2. SETORES, ÁREAS OU DEPARTAMENTOS DIFERENTES (RAIAS) — CRITICAL, OBRIGATÓRIO:
+        - ANTES de gerar, leia a fonte inteira e liste QUEM EXECUTA cada etapa: setores/áreas (ex.: "Recebimento", "Estoque", "Expedição", "Financeiro", "Compras"), equipes, cargos/funções (ex.: "Conferente", "Motorista", "Operador de Empilhadeira", "Analista"), o "Cliente", o "Fornecedor" ou sistemas ("Sistema WMS", "ERP"). Pistas na fonte: "o setor de...", "a equipe de...", "o responsável", "é enviado para...", "entrega para...", "o sistema gera...", nomes de cargos e de áreas.
+        - Se houver 2 OU MAIS executores diferentes, o campo "department" é OBRIGATÓRIO em TODOS os nós de TODAS as versões — inclusive "start" (quem inicia), "end" (quem conclui), decisões (quem decide) e documentos. Nenhum nó pode ficar com "department" vazio nesse caso: na dúvida, use o setor da etapa anterior.
+        - Prefira o nome da ÁREA/SETOR quando a fonte o informar; se a fonte só citar cargos ou papéis, use o cargo/papel como setor.
+        - "department" precisa ser curto (1 a 4 palavras, ex.: "Vendas", "Financeiro", "Logística", "Cliente", "Sistema WMS") porque o app usa esse texto como título da RAIA desenhada ao redor das etapas daquele setor.
+        - Use exatamente o MESMO texto em todas as etapas do mesmo setor e nas três versões (simples, normal e detalhado) — não varie o nome do mesmo grupo (não misture "TI" com "Tecnologia da Informação", nem "Estoque" com "Setor de Estoque").
+        - Quando o trabalho passa de um setor para outro, isso é uma passagem de raia: a etapa seguinte leva o "department" do novo setor.
+        - O aplicativo desenha automaticamente as raias de cada setor depois de gerar o diagrama. Por isso você NUNCA deve gerar nós do tipo "swimlane" ou "frame" — mesmo que apareçam na lista de formas permitidas, esses dois tipos são reservados para uso manual do usuário depois, não para geração por IA.
+        - Só deixe "department" vazio ("") em todos os nós quando o processo inteiro for executado por UM único setor/área/responsável — nesse caso nenhuma raia é desenhada.
 
         4. ABSOLUTE TOTAL TIME PRESERVATION (VALUE STREAM INTEGRITY):
         - The GRAND TOTAL SUM of times (duration + setupTime + waitTime) across all nodes in a version MUST BE RIGOROUSLY IDENTICAL for 'simples', 'normal', and 'detalhado'.

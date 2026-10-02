@@ -19,7 +19,8 @@ check('pede ramificações e evita cadeia reta', /Avoid simplistic straight-line
 check('mantém os níveis originais (detalhado 16 to 28+)', /'detalhado' \(Operational Deep-Dive\): 16 to 28\+ nodes/.test(prompt));
 check('mantém convergência e loops de retrabalho', /Convergence \(Merges\)/.test(prompt) && /Feedback \/ Correction Loops/.test(prompt));
 check('mantém a regra do losango com no mínimo 2 saídas', /NO MÍNIMO 2 arestas de saída/.test(prompt));
-check('pede setores/raias (department)', /department/i.test(prompt) && /RAIAS E QUADROS/.test(prompt));
+check('pede setores/raias (department)', /department/i.test(prompt) && /SETORES, ÁREAS OU DEPARTAMENTOS DIFERENTES \(RAIAS\)/.test(prompt));
+check('setor obrigatório em todos os nós quando há 2+ executores', /OBRIGATÓRIO em TODOS os nós/.test(prompt) && /inclusive "start"/.test(prompt));
 check('nunca gera swimlane/frame como nó', /NÃO os utilize para gerar nós/.test(prompt));
 
 // Acréscimos curtos

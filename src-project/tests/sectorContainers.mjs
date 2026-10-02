@@ -1,4 +1,4 @@
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers } from '../.tmp-sectorContainers.mjs';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments } from '../.tmp-sectorContainers.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -68,26 +68,58 @@ const proc = (id, x, y, dept) => ({
   check('raias sequenciais começam no mesmo X (alinhadas à esquerda)', lanes[0]?.position?.x === lanes[1]?.position?.x);
 }
 
-// 5. Setores intercalados (viram quadro) ganham a MESMA largura/altura no
-//    eixo perpendicular ao fluxo (a do maior setor), centralizada sobre o
-//    próprio conteúdo — para não ficar um quadro maior que outro só porque
-//    um setor tem uma etapa a mais, sem colidir no eixo do fluxo.
+// 5. Setores que se alternam ao longo do fluxo (A -> B -> A) viram RAIAS de
+//    verdade (não quadros soltos): uma faixa por setor, lado a lado e
+//    encostadas, atravessando o fluxo inteiro; cada etapa dentro da sua.
 {
+  const W = 210, H = 70; // tamanho padrão do tipo "process"
   const nodes = [
-    // Vendas: 2 nós, sobrepõe Financeiro no eixo Y (intercalado -> quadro)
-    proc('a1', 0, 0, 'Vendas'),
-    proc('a2', 0, 100, 'Vendas'),
-    // Financeiro: 1 nó só, span menor no eixo X (cross axis para TB)
-    proc('b1', 500, 50, 'Financeiro'),
+    proc('a1', 0, 0, 'Recebimento'),
+    proc('b1', 0, 150, 'Estoque'),
+    proc('a2', 0, 300, 'Recebimento'),
+    proc('c1', 0, 450, 'Financeiro'),
+    proc('b2', 260, 450, 'Estoque'), // mesmo nível de c1
   ];
   const result = buildSectorContainers(nodes, 'TB');
-  const frames = result.filter((n) => n.type === 'frame');
-  check('setores intercalados viram 2 quadros', frames.length === 2);
-  check('quadros intercalados têm a mesma largura (maxCrossSpan uniforme)', frames[0]?.style?.width === frames[1]?.style?.width, `${frames[0]?.style?.width} vs ${frames[1]?.style?.width}`);
-  const frameB = frames.find((f) => f.data?.label === 'Financeiro');
-  const nodeBCenterX = 500 + 210 / 2; // 210 = largura padrão do tipo "process" (getNodeDimensions)
-  const frameBCenterX = frameB.position.x + frameB.style.width / 2;
-  check('quadro do setor menor fica centralizado sobre o próprio conteúdo', Math.abs(frameBCenterX - nodeBCenterX) < 1, `${frameBCenterX} vs ${nodeBCenterX}`);
+  const lanes = result.filter((n) => n.type === 'swimlane');
+  check('setores alternados viram raias (não quadros)', lanes.length === 3 && !result.some((n) => n.type === 'frame'), lanes.map((l) => l.data.label).join(','));
+  check('raias na ordem em que os setores aparecem', lanes.map((l) => l.data.label).join(',') === 'Recebimento,Estoque,Financeiro');
+  check('raias lado a lado, encostadas, com a mesma altura', lanes.every((l, i) => i === 0 || Math.abs(l.position.x - (lanes[i - 1].position.x + lanes[i - 1].style.width)) < 0.01) && lanes.every((l) => l.style.height === lanes[0].style.height && l.position.y === lanes[0].position.y));
+  check('raia vertical (título "Raia Vertical")', lanes.every((l) => l.data.orientation === 'vertical' && l.data.generatedByAI === true));
+  const byId = Object.fromEntries(result.map((n) => [n.id, n]));
+  const dentro = ['a1', 'b1', 'a2', 'c1', 'b2'].every((id) => {
+    const n = byId[id];
+    const lane = lanes.find((l) => l.data.label === n.data.timing.department);
+    return n.position.x >= lane.position.x && n.position.x + W <= lane.position.x + lane.style.width
+      && n.position.y >= lane.position.y && n.position.y + H <= lane.position.y + lane.style.height;
+  });
+  check('cada etapa fica inteira dentro da raia do seu setor', dentro);
+  check('ordem no sentido do fluxo não muda (altura das etapas igual)', ['a1', 'b1', 'a2', 'c1', 'b2'].every((id) => byId[id].position.y === nodes.find((n) => n.id === id).position.y));
+  check('etapas não se sobrepõem', (() => { const r = ['a1', 'b1', 'a2', 'c1', 'b2'].map((id) => byId[id].position); for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) if (r[i].x < r[j].x + W && r[j].x < r[i].x + W && r[i].y < r[j].y + H && r[j].y < r[i].y + H) return false; return true; })());
+
+  // Fluxo da esquerda para a direita: raias horizontais (uma linha por setor).
+  const lr = buildSectorContainers([proc('a1', 0, 0, 'Recebimento'), proc('b1', 300, 0, 'Estoque'), proc('a2', 600, 0, 'Recebimento')], 'LR');
+  const lrLanes = lr.filter((n) => n.type === 'swimlane');
+  const lrById = Object.fromEntries(lr.map((n) => [n.id, n]));
+  check('fluxo para a direita: raias horizontais empilhadas', lrLanes.length === 2 && lrLanes[1].position.y === lrLanes[0].position.y + lrLanes[0].style.height && lrLanes.every((l) => l.data.orientation === 'horizontal'));
+  check('fluxo para a direita: etapas mantêm a posição no sentido do fluxo', lrById.a1.position.x === 0 && lrById.b1.position.x === 300 && lrById.a2.position.x === 600 && lrById.b1.position.y > lrById.a1.position.y);
+}
+
+// 5b. Etapa sem setor num fluxo com setores herda o do vizinho.
+{
+  const nodes = [
+    { id: 's', type: 'start', position: { x: 0, y: 0 }, data: { label: 'Início', timing: {} } },
+    proc('a1', 0, 100, 'Recebimento'),
+    proc('x', 0, 200, ''),
+    proc('b1', 0, 300, 'Estoque'),
+    { id: 'e', type: 'end', position: { x: 0, y: 400 }, data: { label: 'Fim', timing: {} } },
+  ];
+  const edges = [{ source: 's', target: 'a1' }, { source: 'a1', target: 'x' }, { source: 'x', target: 'b1' }, { source: 'b1', target: 'e' }];
+  const filled = Object.fromEntries(fillMissingDepartments(nodes, edges).map((n) => [n.id, n.data.timing.department]));
+  check('etapa sem setor herda o da anterior', filled.x === 'Recebimento' && filled.e === 'Estoque', JSON.stringify(filled));
+  check('início sem setor herda o da etapa seguinte', filled.s === 'Recebimento');
+  const umSetor = [proc('a', 0, 0, 'Vendas'), proc('b', 0, 100, '')];
+  check('um setor só: nada é preenchido (sem raia)', fillMissingDepartments(umSetor, [{ source: 'a', target: 'b' }]) === umSetor);
 }
 
 // 6. rebuildAIContainers: depois de um "Organizar" (dagre) que reposiciona

@@ -97,13 +97,197 @@ export function computeSectorBoxes(groups: Map<string, Node[]>): SectorBox[] {
     });
 }
 
+const isContainerOrInfra = (n: Node) => n.type === 'swimlane' || n.type === 'frame' || n.type === 'junction';
+const deptOf = (n: Node) => String((n.data as any)?.timing?.department || '').trim();
+
+/**
+ * Etapas que a IA deixou sem setor quando o fluxo TEM setores: herdam o setor
+ * da etapa anterior (seguindo as ligações) ou, se não houver, da seguinte.
+ * Assim nenhuma etapa fica fora das raias. Só age com 2+ setores.
+ */
+export function fillMissingDepartments(nodes: Node[], edges: { source: string; target: string }[] = []): Node[] {
+  const shapes = nodes.filter((n) => !isContainerOrInfra(n));
+  const depts = new Set(shapes.map(deptOf).filter(Boolean));
+  if (depts.size < 2 || shapes.every((n) => deptOf(n))) return nodes;
+
+  const dept = new Map(shapes.map((n) => [n.id, deptOf(n)]));
+  const preds = new Map<string, string[]>();
+  const succs = new Map<string, string[]>();
+  edges.forEach((e) => {
+    if (!preds.has(e.target)) preds.set(e.target, []);
+    preds.get(e.target)!.push(e.source);
+    if (!succs.has(e.source)) succs.set(e.source, []);
+    succs.get(e.source)!.push(e.target);
+  });
+  // Propaga pelas ligações até estabilizar (cadeias de etapas sem setor).
+  for (let pass = 0; pass < shapes.length; pass++) {
+    let changed = false;
+    shapes.forEach((n) => {
+      if (dept.get(n.id)) return;
+      const from = (preds.get(n.id) || []).map((id) => dept.get(id)).find(Boolean)
+        || (succs.get(n.id) || []).map((id) => dept.get(id)).find(Boolean);
+      if (from) { dept.set(n.id, from); changed = true; }
+    });
+    if (!changed) break;
+  }
+  // Sem ligação nenhuma: setor da etapa mais próxima no desenho.
+  const center = (n: Node) => { const b = getSectorNodeBox(n); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+  shapes.forEach((n) => {
+    if (dept.get(n.id)) return;
+    const c = center(n);
+    let best = '';
+    let bestD = Infinity;
+    shapes.forEach((m) => {
+      const d = dept.get(m.id);
+      if (!d || m.id === n.id) return;
+      const cm = center(m);
+      const dist = Math.hypot(cm.x - c.x, cm.y - c.y);
+      if (dist < bestD) { bestD = dist; best = d; }
+    });
+    if (best) dept.set(n.id, best);
+  });
+
+  return nodes.map((n) => {
+    if (isContainerOrInfra(n) || deptOf(n) || !dept.get(n.id)) return n;
+    const data: any = n.data || {};
+    return { ...n, data: { ...data, timing: { ...(data.timing || {}), department: dept.get(n.id) } } };
+  });
+}
+
+const LANE_ITEM_GAP = 40;
+
+/**
+ * Setores que se alternam ao longo do fluxo (A → B → A): em vez de quadros
+ * soltos, raias de verdade — uma faixa por setor, lado a lado e encostadas,
+ * atravessando o fluxo inteiro (colunas no fluxo de cima para baixo; linhas
+ * no fluxo da esquerda para a direita). A ordem das etapas no sentido do
+ * fluxo não muda; cada etapa só se desloca para dentro da faixa do seu setor.
+ */
+export function arrangeLaneColumns(nodes: Node[], direction: 'TB' | 'LR' = 'TB'): Node[] {
+  const isTB = direction !== 'LR';
+  // Trabalha sempre "de cima para baixo": no LR troca x<->y e volta no fim.
+  const box = (n: Node) => {
+    const b = getSectorNodeBox(n);
+    return isTB ? b : { x: b.y, y: b.x, width: b.height, height: b.width };
+  };
+  const shapes = nodes.filter((n) => n.type !== 'swimlane' && n.type !== 'frame');
+  const real = shapes.filter((n) => n.type !== 'junction');
+  const depts = [...new Set(real.map(deptOf).filter(Boolean))];
+  if (depts.length < 2) return nodes;
+
+  // Setor de cada forma (junções e formas sem setor: o da forma mais próxima).
+  const keyOf = new Map<string, string>();
+  const centerOf = (n: Node) => { const b = box(n); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+  shapes.forEach((n) => {
+    const own = n.type === 'junction' ? '' : deptOf(n);
+    if (own) { keyOf.set(n.id, own); return; }
+    const c = centerOf(n);
+    let best = depts[0];
+    let bestD = Infinity;
+    real.forEach((m) => {
+      const d = deptOf(m);
+      if (!d) return;
+      const cm = centerOf(m);
+      const dist = Math.hypot(cm.x - c.x, cm.y - c.y);
+      if (dist < bestD) { bestD = dist; best = d; }
+    });
+    keyOf.set(n.id, best);
+  });
+
+  // Níveis do fluxo (mesma altura do centro = mesmo nível do layout).
+  const sorted = [...shapes].sort((a, b) => centerOf(a).y - centerOf(b).y);
+  const rankOf = new Map<string, number>();
+  let rank = -1;
+  let rankY = -Infinity;
+  sorted.forEach((n) => {
+    const cy = centerOf(n).y;
+    if (cy - rankY > 12) { rank++; rankY = cy; }
+    rankOf.set(n.id, rank);
+  });
+
+  // Ordem das faixas: pela primeira aparição do setor no fluxo (e depois pela posição).
+  const order = [...new Set(shapes.map((n) => keyOf.get(n.id)!))].sort((a, b) => {
+    const first = (d: string) => shapes.filter((n) => keyOf.get(n.id) === d);
+    const ra = Math.min(...first(a).map((n) => rankOf.get(n.id)!));
+    const rb = Math.min(...first(b).map((n) => rankOf.get(n.id)!));
+    if (ra !== rb) return ra - rb;
+    return Math.min(...first(a).map((n) => centerOf(n).x)) - Math.min(...first(b).map((n) => centerOf(n).x));
+  });
+
+  // Largura interna de cada faixa: o maior grupo do setor num mesmo nível.
+  const groupsByRankDept = new Map<string, Node[]>();
+  shapes.forEach((n) => {
+    const k = `${rankOf.get(n.id)}|${keyOf.get(n.id)}`;
+    if (!groupsByRankDept.has(k)) groupsByRankDept.set(k, []);
+    groupsByRankDept.get(k)!.push(n);
+  });
+  const groupWidth = (g: Node[]) => g.reduce((sum, n) => sum + box(n).width, 0) + LANE_ITEM_GAP * (g.length - 1);
+  const inner = new Map<string, number>();
+  groupsByRankDept.forEach((g, k) => {
+    const d = k.split('|').slice(1).join('|');
+    inner.set(d, Math.max(inner.get(d) || 0, groupWidth(g)));
+  });
+
+  const minX = Math.min(...shapes.map((n) => box(n).x));
+  const minY = Math.min(...shapes.map((n) => box(n).y));
+  const maxY = Math.max(...shapes.map((n) => box(n).y + box(n).height));
+  const lanes: { dept: string; x: number; width: number }[] = [];
+  let cursor = minX - SECTOR_CONTAINER_SIDE_PADDING;
+  order.forEach((d) => {
+    const width = (inner.get(d) || 0) + SECTOR_CONTAINER_SIDE_PADDING * 2;
+    lanes.push({ dept: d, x: cursor, width });
+    cursor += width;
+  });
+  const laneOf = new Map(lanes.map((l) => [l.dept, l]));
+
+  // Nova posição (no espaço "de cima para baixo") de cada forma.
+  const newX = new Map<string, number>();
+  groupsByRankDept.forEach((g, k) => {
+    const d = k.split('|').slice(1).join('|');
+    const lane = laneOf.get(d)!;
+    const ordered = [...g].sort((a, b) => centerOf(a).x - centerOf(b).x);
+    let x = lane.x + lane.width / 2 - groupWidth(ordered) / 2;
+    ordered.forEach((n) => { newX.set(n.id, x); x += box(n).width + LANE_ITEM_GAP; });
+  });
+
+  const moved = nodes.map((n) => {
+    if (!newX.has(n.id)) return n;
+    const b = box(n);
+    const tbX = newX.get(n.id)!;
+    const tbY = b.y;
+    return { ...n, position: isTB ? { x: tbX, y: tbY } : { x: tbY, y: tbX } };
+  });
+
+  const span = maxY - minY + SECTOR_CONTAINER_TOP_PADDING + SECTOR_CONTAINER_BOTTOM_PADDING;
+  const containers: Node[] = lanes.map((l, idx) => {
+    const tb = { x: l.x, y: minY - SECTOR_CONTAINER_TOP_PADDING, width: l.width, height: span };
+    return {
+      id: `sector_${idx}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      type: 'swimlane',
+      position: isTB ? { x: tb.x, y: tb.y } : { x: tb.y, y: tb.x },
+      zIndex: CONTAINER_BASE_Z_INDEX,
+      style: isTB ? { width: tb.width, height: tb.height } : { width: tb.height, height: tb.width },
+      data: {
+        label: l.dept,
+        orientation: isTB ? 'vertical' : 'horizontal',
+        styleOverride: {},
+        timing: { duration: 0, setupTime: 0, waitTime: 0, pauseTime: 0, otherExtraTime: 0, status: 'pending' },
+        generatedByAI: true,
+      },
+    } as Node;
+  });
+
+  return [...containers, ...moved];
+}
+
 /**
  * Depois do layout automático, agrupa os nós pelo campo "department" (setor
  * preenchido pela IA) e desenha uma raia ou um quadro ao redor de cada grupo,
- * para separar visualmente quem executa cada etapa. Raia (faixa cheia) quando
- * os setores aparecem em sequência, sem se misturar; quadro (moldura só ao
- * redor dos próprios nós) quando os setores se intercalam ao longo do fluxo.
- * Só entra em ação com 2+ setores distintos — um único setor não precisa de moldura.
+ * para separar visualmente quem executa cada etapa. Sempre RAIAS: faixas
+ * empilhadas no sentido do fluxo quando os setores aparecem em sequência,
+ * sem se misturar; faixas lado a lado (uma por setor, atravessando o fluxo
+ * inteiro) quando os setores se alternam — ver arrangeLaneColumns.
+ * Só entra em ação com 2+ setores distintos — um único setor não precisa de raia.
  */
 export function buildSectorContainers(nodes: Node[], direction: 'TB' | 'LR' = 'TB'): Node[] {
   const groups = groupNodesByDepartment(nodes);
@@ -112,6 +296,7 @@ export function buildSectorContainers(nodes: Node[], direction: 'TB' | 'LR' = 'T
 
   const isTB = direction !== 'LR';
   const sequential = sectorsAreSequential(boxes, direction);
+  if (!sequential) return arrangeLaneColumns(nodes, direction);
 
   const sorted = [...boxes].sort((a, b) => (isTB ? a.minY - b.minY : a.minX - b.minX));
 

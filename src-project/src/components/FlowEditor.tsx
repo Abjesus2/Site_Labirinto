@@ -94,7 +94,7 @@ import { AdjustableEdge } from './AdjustableEdge';
 import { MiroToolbar } from './MiroToolbar';
 import { MiroNodeToolbar, ALL_SHAPE_CATEGORIES } from './MiroNodeToolbar';
 import { MANUAL_SHAPE_TYPES, validateGeneratedNodeType } from '../config/shapeRegistry';
-import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers } from '../utils/sectorContainers';
+import { buildSectorContainers, normalizeContainerZIndex, CONTAINER_BASE_Z_INDEX, rebuildAIContainers, fillMissingDepartments } from '../utils/sectorContainers';
 import { generateDrawioXml, generateBpmnXml, generateBizagiBpm } from '../utils/exportFormats';
 import { NavigationModeContext } from '../lib/navigationMode';
 import { applyGeneratedJsonlLine, parseGeneratedBlock, repairGeneratedVersion, fixDecisionExits } from '../utils/aiGenerationParser';
@@ -2671,10 +2671,13 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     // raias/quadros (só os da IA; os manuais do usuário ficam intocados)
     // pra continuarem envolvendo as atividades certas, sem sobrepor.
     const finalNodes = rebuildAIContainers(layoutedNodes, direction);
+    const finalEdges = finalNodes === layoutedNodes
+      ? layoutedEdges
+      : recomputeEdgeRoutingForNodes(layoutedEdges, finalNodes, new Set(finalNodes.map((n) => n.id)));
     setNodes([...finalNodes]);
-    setEdges([...layoutedEdges]);
-    pushHistory(finalNodes, layoutedEdges);
-    saveToCloud(activeVersion, finalNodes, layoutedEdges);
+    setEdges([...finalEdges]);
+    pushHistory(finalNodes, finalEdges);
+    saveToCloud(activeVersion, finalNodes, finalEdges);
     setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 50);
   };
 
@@ -2683,10 +2686,13 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     if (type === 'straighten-all') {
       const { nodes: lNodes, edges: lEdges } = getLayoutedElements(nodes, edges, 'TB');
       const finalNodes = rebuildAIContainers(lNodes, 'TB');
+      const finalEdges = finalNodes === lNodes
+        ? lEdges
+        : recomputeEdgeRoutingForNodes(lEdges, finalNodes, new Set(finalNodes.map((n) => n.id)));
       setNodes([...finalNodes]);
-      setEdges([...lEdges]);
-      pushHistory(finalNodes, lEdges);
-      saveToCloud(activeVersion, finalNodes, lEdges);
+      setEdges([...finalEdges]);
+      pushHistory(finalNodes, finalEdges);
+      saveToCloud(activeVersion, finalNodes, finalEdges);
       setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
       return;
     }
@@ -3005,8 +3011,14 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         sanitized.nodes,
         sanitized.edges
       );
-      const nodesWithSectors = buildSectorContainers(lNodes, 'TB');
-      layoutedGenerated[v] = { nodes: nodesWithSectors, edges: lEdges };
+      // Etapa sem setor num fluxo com setores herda o do vizinho — assim
+      // nenhuma fica fora das raias.
+      const withDepartments = fillMissingDepartments(lNodes, lEdges);
+      const nodesWithSectors = buildSectorContainers(withDepartments, 'TB');
+      // As raias podem levar etapas para a coluna do seu setor: as linhas
+      // são recalculadas para a nova posição (sem ficarem em diagonal).
+      const routedEdges = recomputeEdgeRoutingForNodes(lEdges, nodesWithSectors, new Set(nodesWithSectors.map((n) => n.id)));
+      layoutedGenerated[v] = { nodes: nodesWithSectors, edges: routedEdges };
     });
 
     if (versionsSemLigacao.length > 0) {
@@ -3058,14 +3070,34 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       });
       newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
     } else {
-      // mode === 'replace'
+      // mode === 'replace' — versão que a IA não enviou NÃO apaga a que já
+      // existia (antes ficava vazia sem aviso nenhum).
       selectedComplexities.forEach(c => {
+        if (!(layoutedGenerated[c]?.nodes?.length)) return;
         updatedVersions[c] = {
           nodes: layoutedGenerated[c]?.nodes || [],
           edges: layoutedGenerated[c]?.edges || []
         };
       });
       newActiveVersionKey = selectedComplexities.includes(activeVersion) ? activeVersion : (selectedComplexities.includes('normal') ? 'normal' : selectedComplexities[0]);
+    }
+
+    // Avisa qual versão pedida não veio (mesmo depois da nova tentativa).
+    const versoesFaltando = selectedComplexities.filter(c => !(layoutedGenerated[c]?.nodes?.length));
+    if (versoesFaltando.length > 0) {
+      const label = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
+      const algumaVeio = versoesFaltando.length < selectedComplexities.length;
+      showToast({
+        message:
+          `A IA não devolveu a versão ${versoesFaltando.map(label).join(', ')}` +
+          (algumaVeio ? ' (as outras foram geradas)' : '') +
+          '. O que já existia nela foi mantido. Gere de novo marcando só essa versão, ou troque de provedor em "Configurar IA".',
+        tone: 'warn',
+        timeout: 15000,
+      });
+      // Abre uma versão que foi gerada, para o usuário ver o resultado.
+      const geradas = selectedComplexities.filter(c => layoutedGenerated[c]?.nodes?.length);
+      if (geradas.length && !geradas.includes(newActiveVersionKey)) newActiveVersionKey = geradas.includes('normal') ? 'normal' : geradas[0];
     }
 
     setVersions(updatedVersions);
@@ -3093,77 +3125,121 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     aiAbortControllerRef.current = new AbortController();
 
     try {
-      const response = await fetch('/api/generate-diagram', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: aiAbortControllerRef.current.signal,
-        body: JSON.stringify({ 
-          prompt: deriveFromExisting ? "" : prompt, 
-          complexities: selectedComplexities,
-          existingVersions: deriveFromExisting ? { [sourceVersion]: versions[sourceVersion] } : undefined,
-          sourceVersion: deriveFromExisting ? sourceVersion : undefined,
-          appendMode: mode === 'append',
-          allowedShapeTypes,
-          files: aiFiles.map(f => ({ name: f.name, mimeType: f.type, data: f.data }))
-        })
-      });
+      const files = aiFiles.map(f => ({ name: f.name, mimeType: f.type, data: f.data }));
 
-      if (!response.body) throw new Error('Resposta da IA veio sem conteúdo.');
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-
-      const rawGenerated: Record<string, { nodes: Node[], edges: Edge[] }> = {};
-      selectedComplexities.forEach(c => {
-        rawGenerated[c] = { nodes: [], edges: [] };
-      });
-
-      // Vigia de travamento: se o provedor parar de mandar dados no meio do
-      // streaming sem nunca fechar a conexão, o "await reader.read()" fica
-      // pendurado para sempre — a barra de progresso trava em 100% e o app
-      // nunca sai do estado "Gerando Fluxograma...". 30s sem NENHUM byte novo
-      // cancela sozinho, em vez de exigir que o usuário perceba e clique em
-      // "Cancelar" manualmente.
-      const STALL_TIMEOUT_MS = 30000;
-      const readWithStallGuard = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
-        new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('STALL_TIMEOUT')), STALL_TIMEOUT_MS);
-          reader.read().then(
-            (result) => { clearTimeout(timer); resolve(result); },
-            (err) => { clearTimeout(timer); reject(err); },
-          );
+      // Uma chamada à IA, lendo o streaming JSONL para dentro de "target".
+      const streamInto = async (
+        body: Record<string, any>,
+        target: Record<string, { nodes: Node[], edges: Edge[] }>,
+      ) => {
+        const response = await fetch('/api/generate-diagram', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: aiAbortControllerRef.current!.signal,
+          body: JSON.stringify(body),
         });
 
-      while (true) {
-        let readResult: ReadableStreamReadResult<Uint8Array>;
-        try {
-          readResult = await readWithStallGuard();
-        } catch (e: any) {
-          if (e?.message === 'STALL_TIMEOUT') {
-            aiAbortControllerRef.current?.abort();
-            throw new Error(
-              'A IA parou de responder no meio da geração (sem nenhuma novidade por 30s). Tente novamente ou troque de provedor em "Configurar IA".',
+        if (!response.body) throw new Error('Resposta da IA veio sem conteúdo.');
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        // Vigia de travamento: se o provedor parar de mandar dados no meio do
+        // streaming sem nunca fechar a conexão, o "await reader.read()" fica
+        // pendurado para sempre — a barra de progresso trava em 100% e o app
+        // nunca sai do estado "Gerando Fluxograma...". 30s sem NENHUM byte novo
+        // cancela sozinho, em vez de exigir que o usuário perceba e clique em
+        // "Cancelar" manualmente.
+        const STALL_TIMEOUT_MS = 30000;
+        const readWithStallGuard = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
+          new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('STALL_TIMEOUT')), STALL_TIMEOUT_MS);
+            reader.read().then(
+              (result) => { clearTimeout(timer); resolve(result); },
+              (err) => { clearTimeout(timer); reject(err); },
             );
+          });
+
+        while (true) {
+          let readResult: ReadableStreamReadResult<Uint8Array>;
+          try {
+            readResult = await readWithStallGuard();
+          } catch (e: any) {
+            if (e?.message === 'STALL_TIMEOUT') {
+              aiAbortControllerRef.current?.abort();
+              throw new Error(
+                'A IA parou de responder no meio da geração (sem nenhuma novidade por 30s). Tente novamente ou troque de provedor em "Configurar IA".',
+              );
+            }
+            throw e;
           }
-          throw e;
+          const { done, value } = readResult;
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const lineProgress = applyGeneratedJsonlLine(line, target, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
+            if (lineProgress !== null) setProgress(lineProgress);
+          }
         }
-        const { done, value } = readResult;
-        if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        // Última linha sem "\n" no final ficava presa no buffer e era perdida.
+        buffer += decoder.decode();
+        if (buffer.trim()) applyGeneratedJsonlLine(buffer, target, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
+      };
 
-        for (const line of lines) {
-          const lineProgress = applyGeneratedJsonlLine(line, rawGenerated, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
-          if (lineProgress !== null) setProgress(lineProgress);
+      const emptyBuckets = (list: string[]) => {
+        const out: Record<string, { nodes: Node[], edges: Edge[] }> = {};
+        list.forEach(c => { out[c] = { nodes: [], edges: [] }; });
+        return out;
+      };
+
+      const rawGenerated = emptyBuckets(selectedComplexities);
+      await streamInto({
+        prompt: deriveFromExisting ? "" : prompt,
+        complexities: selectedComplexities,
+        existingVersions: deriveFromExisting ? { [sourceVersion]: versions[sourceVersion] } : undefined,
+        sourceVersion: deriveFromExisting ? sourceVersion : undefined,
+        appendMode: mode === 'append',
+        allowedShapeTypes,
+        files,
+      }, rawGenerated);
+
+      // A IA escreve as versões em sequência e a "detalhado" (a maior) vem
+      // por último: com arquivo anexado a resposta fica longa e às vezes
+      // termina antes de chegar nela. Pede de novo SÓ o que faltou, com o
+      // mesmo texto/arquivo e as versões já geradas como referência (mesmo
+      // processo e mesmo tempo total).
+      const missing = selectedComplexities.filter(c => (rawGenerated[c]?.nodes?.length || 0) === 0);
+      const generatedOk = selectedComplexities.filter(c => (rawGenerated[c]?.nodes?.length || 0) > 0);
+      if (missing.length > 0 && !aiAbortControllerRef.current?.signal.aborted) {
+        const label = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
+        showToast({ message: `A IA não enviou a versão ${missing.map(label).join(', ')}. Gerando essa versão separadamente...`, timeout: 8000 });
+        setProgress(60);
+        const retry = emptyBuckets(missing);
+        const reference: Record<string, any> = {};
+        generatedOk.forEach(c => { reference[c] = rawGenerated[c]; });
+        if (deriveFromExisting && versions[sourceVersion]) reference[sourceVersion] = versions[sourceVersion];
+        try {
+          await streamInto({
+            prompt: deriveFromExisting ? "" : prompt,
+            complexities: missing,
+            existingVersions: Object.keys(reference).length ? reference : undefined,
+            sourceVersion: deriveFromExisting ? sourceVersion : undefined,
+            appendMode: mode === 'append',
+            allowedShapeTypes,
+            files,
+          }, retry);
+          missing.forEach(c => { if (retry[c]?.nodes?.length) rawGenerated[c] = retry[c]; });
+        } catch (retryErr: any) {
+          if (retryErr?.name === 'AbortError') throw retryErr;
+          console.error('Nova tentativa da versão que faltou falhou:', retryErr);
         }
       }
-
-      // Última linha sem "\n" no final ficava presa no buffer e era perdida.
-      buffer += decoder.decode();
-      if (buffer.trim()) applyGeneratedJsonlLine(buffer, rawGenerated, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
 
       finalizeGeneratedContent(rawGenerated, mode);
     } catch (err: any) {
