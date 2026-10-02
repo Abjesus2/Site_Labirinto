@@ -86,6 +86,13 @@ export const buildPrompt = (body: any): string => {
     contextStr += `\n\nVERSÕES JÁ GERADAS NESTA MESMA GERAÇÃO (referência, formato compacto V/N/E):\n${toCompactReference(referenceVersions)}\n\nGere AGORA somente a(s) versão(ões) [${compList}], do MESMO processo: mesmos setores ("department" com os mesmos nomes), mesma sequência geral e o MESMO tempo total (soma de duration + setupTime + waitTime) das versões acima — mudando só o nível de detalhe.`;
   }
 
+  // Continuação: a resposta anterior desta versão foi cortada no limite de
+  // tamanho do provedor. Manda o que já chegou e pede só o que falta.
+  if (body?.continuation && body.continuation.version) {
+    const c = body.continuation;
+    contextStr += `\n\nCONTINUAÇÃO — a sua resposta anterior para a versão "${c.version}" foi CORTADA no limite de tamanho. Abaixo está TUDO o que já foi recebido dela (formato compacto V/N/E):\n${toCompactReference({ [c.version]: { nodes: c.nodes || [], edges: c.edges || [] } })}\n\nCONTINUE EXATAMENTE DE ONDE PAROU: escreva a linha "V|${c.version}" e depois SOMENTE as etapas (N) e ligações (E) que ainda faltam até o fim do processo — sem repetir nenhuma linha acima, usando os MESMOS ids para ligar às etapas que já existem (inclusive as saídas que faltam das decisões acima). Termine com a linha FIM.`;
+  }
+
   if (appendMode) {
     contextStr += `\n\nAPPEND MODE IS ON: The user wants to add new steps to the existing diagram without replacing it. YOU MUST USE GLOBALLY UNIQUE IDs for all new nodes and edges (e.g., prefixing with "new_" or a random string like "n_abc123") so they do not conflict with the existing IDs provided above.`;
   }

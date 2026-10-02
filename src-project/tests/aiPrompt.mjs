@@ -47,4 +47,11 @@ check('sem notes obrigatórios', !/"notes"/.test(prompt));
   check('"Gerar manualmente": prompt completo em JSONL, sem formato compacto', /JSON Lines format \(JSONL\)/.test(manual) && !/COMPACT ENCODING/.test(manual) && /\[simples, normal, detalhado\]/.test(manual));
 }
 
+{
+  const cont = buildPrompt({ prompt: 'Recebimento.', complexities: ['detalhado'], compactOutput: true,
+    continuation: { version: 'detalhado', nodes: [{ id: 'd7', type: 'decision', data: { label: 'Nota confere?', timing: { duration: 0, department: 'Recebimento' } } }], edges: [{ source: 'd6', target: 'd7' }] } });
+  check('continuação: manda o que já chegou e pede só o que falta, terminando com FIM', /CONTINUAÇÃO/.test(cont) && /N\|d7\|decision\|Nota confere\?/.test(cont) && /sem repetir nenhuma linha/.test(cont) && /Termine com a linha FIM/.test(cont));
+  check('formato compacto: ligações logo depois da etapa e decisão com 2 saídas', /right after each N line, write the E lines that LEAVE that node/.test(cont) && /ALWAYS followed by its 2 \(or more\) labeled E lines/.test(cont) && /last line: FIM/.test(cont));
+}
+
 console.log(R.join('\n'));

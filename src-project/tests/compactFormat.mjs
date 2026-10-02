@@ -1,4 +1,4 @@
-import { compactTextToJsonl, compactLineToJsonl, newCompactState, compactStreamToJsonl, toCompactReference } from '../.tmp-compactFormat.mjs';
+import { compactTextToJsonl, compactLineToJsonl, newCompactState, compactStreamToJsonl, toCompactReference, mergeGeneratedPart, COMPLETE_MARKER } from '../.tmp-compactFormat.mjs';
 import { applyGeneratedJsonlLine } from '../.tmp-aiParser.mjs';
 
 const R = [];
@@ -46,6 +46,25 @@ check('referência compacta (sem raias, sem versão vazia)', ref === 'V|detalhad
 const tam = (s) => s.length;
 const jsonlNormal = compactTextToJsonl(compacto);
 check('formato compacto bem menor que o JSONL', tam(compacto) < tam(jsonlNormal) * 0.5, `${tam(compacto)} vs ${tam(jsonlNormal)}`);
+
+// "FIM" marca a versão completa; sem ele, a resposta foi cortada.
+{
+  const st2 = newCompactState(); st2.version = 'detalhado';
+  check('"FIM" vira a marca de versão completa', compactLineToJsonl('FIM', st2) === COMPLETE_MARKER && compactLineToJsonl('X|FIM', st2) === COMPLETE_MARKER && compactLineToJsonl('fim.', st2) === COMPLETE_MARKER);
+  const acumulado = { nodes: [{ id: 'd1' }, { id: 'd2' }], edges: [{ id: 'ce1', source: 'd1', target: 'd2' }] };
+  const parte2 = { nodes: [{ id: 'd2' }, { id: 'd3' }], edges: [{ id: 'ce1', source: 'd2', target: 'd3' }, { id: 'ce2', source: 'd1', target: 'd2' }] };
+  const r = mergeGeneratedPart(acumulado, parte2, 2);
+  check('continuação: junta só o que é novo (sem repetir etapa/ligação)', r.addedNodes === 1 && r.addedEdges === 1 && acumulado.nodes.length === 3 && acumulado.edges.length === 2);
+  check('continuação: ids de ligação repetidos são renomeados', new Set(acumulado.edges.map((e) => e.id)).size === 2 && acumulado.edges[1].id === 'ce1_p2');
+}
+
+// Resposta cortada no meio da última linha: a linha incompleta é descartada.
+{
+  const cortado = 'V|detalhado\nN|d1|start|Início|0|Recebimento\nE|d1|d2|\nN|d2|process|Conferir os volu';
+  const r = compactTextToJsonl(cortado).split('\n').map((l) => JSON.parse(l));
+  check('linha cortada no fim é descartada (não vira etapa com texto pela metade)', r.length === 2 && !r.some((x) => x.node?.id === 'd2'));
+  check('linha final "FIM" sem quebra de linha continua valendo', compactTextToJsonl('V|x\nN|a|start|A|0\nFIM').endsWith(COMPLETE_MARKER));
+}
 
 console.log(R.join('\n'));
 process.exit(R.some((l) => l.startsWith('FALHA')) ? 1 : 0);

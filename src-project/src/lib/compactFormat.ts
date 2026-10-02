@@ -22,15 +22,23 @@ export const compactFormatInstructions = (compList: string): string => `CRITICAL
         N|<id>|<type>|<label>|<duration>|<department>|<setupTime>|<waitTime>|<pauseTime>|<otherExtraTime>|<notes>   -> a node (fields after duration may be empty or omitted at the end; notes is the last field)
         E|<source id>|<target id>|<label>|?              -> an edge (label may be empty; put "?" in the last field ONLY when the connection is uncertain — that is the "isDubious": true of the rules below)
         Never use "|" inside a label. Every rule below about nodes and edges still applies; "department" is the 6th field of N.
+        ORDER (MANDATORY): right after each N line, write the E lines that LEAVE that node (its outgoing edges) — never leave all edges for the end. A "decision" node is ALWAYS followed by its 2 (or more) labeled E lines ("Sim"/"Não"...), each to a different node.
+        The connections are known from the source: write them as normal edges. "?" is RARE — only for a link the source really does not explain.
+        When the whole version is finished, write a last line: FIM
         Example:
         V|simples
         N|n1|start|Início do Processo|0|Atendimento
-        N|n2|process|Triagem e Validação|15|Atendimento|2
-        N|n3|decision|Documentação está completa?|0|Atendimento
         E|n1|n2|
+        N|n2|process|Triagem e Validação|15|Atendimento|2
         E|n2|n3|
+        N|n3|decision|Documentação está completa?|0|Atendimento
         E|n3|n4|Sim
-        E|n3|n2|Não`;
+        E|n3|n2|Não
+        N|n4|end|Fim do Processo|0|Atendimento
+        FIM`;
+
+/** Linha de controle que o conversor emite quando a IA escreve "FIM". */
+export const COMPLETE_MARKER = '{"complete":true}';
 
 export interface CompactState {
   version: string;
@@ -55,6 +63,7 @@ export function compactLineToJsonl(raw: string, state: CompactState): string | n
   if (line.startsWith('{')) return line;
   const parts = line.split('|').map((p) => p.trim());
   const kind = parts[0].toUpperCase();
+  if (/^(X\|)?(FIM|END)\.?$/i.test(line)) return COMPLETE_MARKER;
   if (kind === 'V' && parts[1]) {
     state.version = parts[1].toLowerCase();
     return null;
@@ -90,13 +99,24 @@ export function compactLineToJsonl(raw: string, state: CompactState): string | n
   return null;
 }
 
+/**
+ * Última linha sem quebra de linha no fim: numa resposta cortada no limite
+ * de tamanho ela pode estar pela METADE (ex.: etapa com o texto cortado).
+ * Só vale se for o "FIM"; senão é descartada — a continuação a reescreve
+ * inteira (ela não está no que foi recebido).
+ */
+const lastLineIfSafe = (line: string, state: CompactState): string | null => {
+  const out = compactLineToJsonl(line, state);
+  return out === COMPLETE_MARKER || (out && out.startsWith('{"progress"')) ? out : null;
+};
+
 /** Converte um texto inteiro (várias linhas) do formato compacto para JSONL. */
 export function compactTextToJsonl(text: string, state: CompactState = newCompactState()): string {
-  return text
-    .split('\n')
-    .map((l) => compactLineToJsonl(l, state))
-    .filter((l): l is string => !!l)
-    .join('\n');
+  const lines = text.split('\n');
+  const last = lines.pop() ?? '';
+  const out = lines.map((l) => compactLineToJsonl(l, state));
+  out.push(lastLineIfSafe(last, state));
+  return out.filter((l): l is string => !!l).join('\n');
 }
 
 /** Stream de texto compacto -> stream de JSONL (linha a linha). */
@@ -115,7 +135,7 @@ export function compactStreamToJsonl(input: ReadableStream<Uint8Array>): Readabl
         const { done, value } = await reader.read();
         if (done) {
           buffer += decoder.decode();
-          const last = compactLineToJsonl(buffer, state);
+          const last = lastLineIfSafe(buffer, state);
           if (last) controller.enqueue(encoder.encode(last + '\n'));
           controller.close();
           return;
@@ -141,6 +161,37 @@ export function compactStreamToJsonl(input: ReadableStream<Uint8Array>): Readabl
  * referência às próximas (mesmo processo, setores e tempo total) sem
  * mandar o JSON inteiro de volta para a IA.
  */
+/** Junta uma parte nova (continuação) ao que já foi recebido, sem repetir. */
+export function mergeGeneratedPart(
+  into: { nodes: any[]; edges: any[] },
+  part: { nodes: any[]; edges: any[] },
+  partIndex: number,
+): { addedNodes: number; addedEdges: number } {
+  const nodeIds = new Set(into.nodes.map((n) => String(n.id).toLowerCase()));
+  const edgeKeys = new Set(into.edges.map((e) => `${e.source}->${e.target}`.toLowerCase()));
+  const edgeIds = new Set(into.edges.map((e) => e.id));
+  let addedNodes = 0;
+  let addedEdges = 0;
+  part.nodes.forEach((n) => {
+    const k = String(n.id).toLowerCase();
+    if (!k || nodeIds.has(k)) return;
+    nodeIds.add(k);
+    into.nodes.push(n);
+    addedNodes++;
+  });
+  part.edges.forEach((e) => {
+    const k = `${e.source}->${e.target}`.toLowerCase();
+    if (edgeKeys.has(k)) return;
+    edgeKeys.add(k);
+    // Cada parte numera as ligações do zero ("ce1"...): renomeia se repetir.
+    const id = edgeIds.has(e.id) ? `${e.id}_p${partIndex}` : e.id;
+    edgeIds.add(id);
+    into.edges.push({ ...e, id });
+    addedEdges++;
+  });
+  return { addedNodes, addedEdges };
+}
+
 export function toCompactReference(versions: Record<string, { nodes: any[]; edges: any[] }>): string {
   return Object.entries(versions)
     .filter(([, v]) => v?.nodes?.length)

@@ -115,6 +115,7 @@ import { ImportFlowModal } from './ImportFlowModal';
 import { ImportVersionsModal } from './ImportVersionsModal';
 import { readImportFile, applyImport, ImportFile, ImportMode, ImportSource } from '../lib/importVersions';
 import { FIXED_VERSIONS, isFixedVersion, guessTargetVersion, normalizeVersions } from '../lib/fixedVersions';
+import { COMPLETE_MARKER, mergeGeneratedPart } from '../lib/compactFormat';
 import {
   buildClip,
   collectSelection,
@@ -3236,7 +3237,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const streamInto = async (
         body: Record<string, any>,
         target: Record<string, { nodes: Node[], edges: Edge[] }>,
-      ) => {
+      ): Promise<{ complete: boolean }> => {
+        let complete = false;
         const response = await fetch('/api/generate-diagram', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3287,6 +3289,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
+            if (line.trim() === COMPLETE_MARKER) { complete = true; continue; }
             const lineProgress = applyGeneratedJsonlLine(line, target, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
             if (lineProgress !== null) setProgress(lineProgress);
           }
@@ -3294,7 +3297,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
         // Última linha sem "\n" no final ficava presa no buffer e era perdida.
         buffer += decoder.decode();
-        if (buffer.trim()) applyGeneratedJsonlLine(buffer, target, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
+        if (buffer.trim() === COMPLETE_MARKER) complete = true;
+        else if (buffer.trim()) applyGeneratedJsonlLine(buffer, target, allowedShapeTypes, AI_SHAPE_FALLBACK_MAP);
+        return { complete };
       };
 
       const emptyBuckets = (list: string[]) => {
@@ -3315,8 +3320,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const order = ['detalhado', 'normal', 'simples'].filter(c => selectedComplexities.includes(c));
       selectedComplexities.forEach(c => { if (!order.includes(c)) order.push(c); });
       const label = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
-      const looksCut = (b?: { nodes: Node[]; edges: Edge[] }) =>
-        !b || b.nodes.length === 0 || (b.nodes.length > 1 && b.edges.length === 0);
+      // Até quantas partes uma versão pode ser pedida (fluxos muito grandes
+      // passam do limite de resposta do provedor e chegam em partes).
+      const MAX_PARTS = 12;
 
       for (let i = 0; i < order.length; i++) {
         const c = order[i];
@@ -3324,7 +3330,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         setProgress(Math.round(10 + (80 * i) / order.length));
         const reference: Record<string, { nodes: Node[]; edges: Edge[] }> = {};
         order.slice(0, i).forEach(prev => { if (rawGenerated[prev]?.nodes?.length) reference[prev] = rawGenerated[prev]; });
-        const body = {
+        const baseBody = {
           prompt: deriveFromExisting ? "" : prompt,
           complexities: [c],
           existingVersions: deriveFromExisting ? { [sourceVersion]: versions[sourceVersion] } : undefined,
@@ -3336,23 +3342,40 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           compactOutput: true,
         };
 
-        for (let tentativa = 1; tentativa <= 2; tentativa++) {
+        // A IA termina a versão com "FIM". Sem isso, a resposta foi cortada no
+        // limite de tamanho: pede a continuação (com tudo o que já chegou) até
+        // terminar — assim o fluxo sai inteiro e detalhado, de qualquer tamanho.
+        const acumulado = { nodes: [] as Node[], edges: [] as Edge[] };
+        let falhasSeguidas = 0;
+        for (let parte = 1; parte <= MAX_PARTS; parte++) {
+          if (aiAbortControllerRef.current?.signal.aborted) break;
           const bucket = emptyBuckets([c]);
+          const body = parte === 1 || acumulado.nodes.length === 0
+            ? baseBody
+            : { ...baseBody, continuation: { version: c, nodes: acumulado.nodes, edges: acumulado.edges } };
+          let complete = false;
           try {
-            await streamInto(body, bucket);
+            ({ complete } = await streamInto(body, bucket));
           } catch (e: any) {
             if (e?.name === 'AbortError') throw e;
-            // Erro só desta versão: as outras seguem; sem nenhuma, o erro sobe.
-            if (tentativa === 2 && !order.some(o => rawGenerated[o]?.nodes?.length)) throw e;
-            console.error(`Falha ao gerar a versão ${c}:`, e);
+            falhasSeguidas++;
+            console.error(`Falha ao gerar a versão ${c} (parte ${parte}):`, e);
+            // Duas falhas seguidas: desiste desta versão (sem nenhuma versão, o erro sobe).
+            if (falhasSeguidas >= 2) {
+              if (!acumulado.nodes.length && !order.some(o => rawGenerated[o]?.nodes?.length)) throw e;
+              break;
+            }
+            continue;
           }
-          const melhor = (bucket[c]?.nodes?.length || 0) >= (rawGenerated[c]?.nodes?.length || 0);
-          if (bucket[c]?.nodes?.length && (melhor || looksCut(rawGenerated[c]))) rawGenerated[c] = bucket[c];
-          if (!looksCut(rawGenerated[c]) || aiAbortControllerRef.current?.signal.aborted) break;
-          if (tentativa === 1) {
-            showToast({ message: `A resposta da versão ${label(c)} veio incompleta (passou do limite de tamanho). Pedindo de novo...`, timeout: 7000 });
+          falhasSeguidas = 0;
+          const { addedNodes, addedEdges } = mergeGeneratedPart(acumulado, bucket[c] || { nodes: [], edges: [] }, parte);
+          if (complete) break;
+          if (addedNodes === 0 && addedEdges === 0) break; // nada novo: não adianta insistir
+          if (parte < MAX_PARTS) {
+            showToast({ message: `A versão ${label(c)} passou do limite de tamanho da resposta. Recebendo a continuação (parte ${parte + 1})...`, timeout: 6000 });
           }
         }
+        if (acumulado.nodes.length) rawGenerated[c] = acumulado;
       }
       setProgress(95);
 
