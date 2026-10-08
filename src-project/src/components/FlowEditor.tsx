@@ -4827,9 +4827,11 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
           )}
         </div>
 
-        {/* RIGHT DOCKED SIDEBAR INSPECTOR (COMPACT, NON-OVERLAPPING, HIDEABLE) */}
+        {/* RIGHT DOCKED SIDEBAR INSPECTOR (COMPACT, NON-OVERLAPPING, HIDEABLE)
+            Com a barra superior oculta, o painel desce um pouco para não ficar
+            embaixo do botão "Mostrar barra" (e do alerta de backup) no canto. */}
         {hasActiveSelection && isRightSidebarOpen && (
-          <aside className="absolute right-3 top-3 bottom-16 w-80 sm:w-84 z-40 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-zinc-200/90 flex flex-col overflow-hidden animate-in fade-in slide-in-from-right-4 duration-200">
+          <aside data-right-sidebar className={`absolute right-3 ${headerHidden ? 'top-12' : 'top-3'} bottom-16 w-80 sm:w-84 z-40 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-zinc-200/90 flex flex-col overflow-hidden animate-in fade-in slide-in-from-right-4 duration-200`}>
             {selectedNodesList.length > 0 && selectedEdgesList.length === 0 ? (
               <MiroNodeToolbar
                 node={selectedNodesList[0]}
