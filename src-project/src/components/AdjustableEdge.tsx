@@ -17,26 +17,21 @@ import {
   Check
 } from 'lucide-react';
 import { getNodeDimensions } from './CustomNodes';
-import { collectLabelObstacles, placeEdgeLabel, pointAtFraction, fractionOfPoint } from '../lib/labelPlacement';
+import { placeEdgeLabel, pointAtFraction, fractionOfPoint, createObstacleIndex, groupsTouching, sameItems, Rect } from '../lib/labelPlacement';
 import { showToast } from '../lib/embedCompat';
 import { useNavigationMode } from '../lib/navigationMode';
+import { useIsMultiSelect } from '../lib/selectionMode';
 
 // DESEMPENHO (fluxos grandes): cada linha só se redesenha quando ela mesma
-// muda. Só as linhas COM texto acompanham a lista de formas (o texto desvia
-// das formas), e os obstáculos são calculados uma vez por mudança e
-// compartilhados entre todas as linhas, em vez de uma vez por linha.
-const NO_NODES: Node[] = [];
-const obstacleCache = new WeakMap<object, ReturnType<typeof collectLabelObstacles>>();
-const sharedLabelObstacles = (nodes: Node[]) => {
-  let cached = obstacleCache.get(nodes);
-  if (!cached) {
-    cached = collectLabelObstacles(nodes as any[], getNodeDimensions);
-    obstacleCache.set(nodes, cached);
-  }
-  return cached;
-};
-const allNodesSelector = (s: { nodes: Node[] }) => s.nodes;
-const noNodesSelector = () => NO_NODES;
+// muda. Só as linhas COM texto observam as formas (o texto desvia delas), e
+// cada uma observa apenas as formas PERTO dela, pelo índice compartilhado de
+// obstáculos (ver createObstacleIndex): selecionar formas ou mover uma forma
+// longe não redesenha a linha.
+const NO_GROUPS: Rect[][] = [];
+const obstacleIndex = createObstacleIndex(getNodeDimensions);
+// Folga em volta das pontas/pontos da linha: cobre os desvios da rota e a
+// largura do próprio texto.
+const LABEL_REGION_MARGIN = 160;
 import {
   resolveReconnectCandidate,
   isValidNodeHandleId,
@@ -144,6 +139,9 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   const { screenToFlowPosition, flowToScreenPosition, getEdges, getNodes } = useReactFlow();
   const storeApi = useStoreApi();
   const isNavigationMode = useNavigationMode();
+  // Vários itens selecionados (caixa): só o destaque; pontos de reconexão e
+  // alças de trecho ficam para quando UMA linha estiver selecionada.
+  const isMultiSelect = useIsMultiSelect();
   const edgeData = (data as AdjustableEdgeData) || {};
   const borderRadius = type === 'step' ? 0 : edgeData.borderRadius !== undefined ? edgeData.borderRadius : 16;
 
@@ -152,8 +150,37 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   const labelPolylineRef = useRef<EdgePoint[]>([]);
   const labelPosRef = useRef<EdgePoint>({ x: 0, y: 0 });
   const [labelText, setLabelText] = useState((label as string) || edgeData.label || '');
-  // Lista reativa só para linhas com texto (para o texto desviar das formas).
-  const liveNodes = useStore(String(labelText || '') ? allNodesSelector : noNodesSelector);
+  // Obstáculos perto desta linha (só para linhas com texto).
+  const hasLabelText = !!String(labelText || '');
+  const regionControlPoints = edgeData.manualRouting && Array.isArray(edgeData.controlPoints) ? edgeData.controlPoints : undefined;
+  const nearbyObstaclesSelector = useCallback(
+    (s: any): Rect[][] => {
+      if (!hasLabelText) return NO_GROUPS;
+      const a = s.nodeLookup.get(source);
+      const b = s.nodeLookup.get(target);
+      if (!a || !b) return NO_GROUPS;
+      let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+      const add = (x: number, y: number) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+      };
+      for (const n of [a, b]) {
+        const p = n.internals.positionAbsolute;
+        add(p.x, p.y);
+        add(p.x + (n.measured?.width ?? 0), p.y + (n.measured?.height ?? 0));
+      }
+      (regionControlPoints || []).forEach((p: EdgePoint) => add(p.x, p.y));
+      if (!Number.isFinite(left)) return NO_GROUPS;
+      return groupsTouching(obstacleIndex(s.nodes), {
+        left: left - LABEL_REGION_MARGIN,
+        right: right + LABEL_REGION_MARGIN,
+        top: top - LABEL_REGION_MARGIN,
+        bottom: bottom + LABEL_REGION_MARGIN,
+      });
+    },
+    [hasLabelText, source, target, regionControlPoints],
+  );
+  const nearbyObstacleGroups = useStore(nearbyObstaclesSelector, sameItems);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Dragging states for handles
@@ -344,7 +371,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   // nem as formas nem os selos de tempo.
   const labelTextValue = String(labelText || '');
   const estimatedLabelWidth = Math.max(28, labelTextValue.length * 6.2 + 16);
-  const labelObstacles = liveNodes === NO_NODES ? [] : sharedLabelObstacles(liveNodes);
+  const labelObstacles = React.useMemo(() => nearbyObstacleGroups.flat(), [nearbyObstacleGroups]);
   if (labelTextValue && !isEditingLabel && !isUserPlacedLabel && !labelDragPos) {
     const routeForLabel =
       points && points.length >= 2
@@ -431,6 +458,8 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
     el.addEventListener('pointercancel', onUp);
   };
 
+  const showEditControls = (selected && !isMultiSelect) || !!draggingHandle;
+
   // Calculate segment controls for all orthogonal step paths
   const segmentControls: Array<{
     index: number;
@@ -453,7 +482,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
       )
     : points;
 
-  if (handleRoute.length >= 2) {
+  if (showEditControls && handleRoute.length >= 2) {
     for (let i = 0; i < handleRoute.length - 1; i++) {
       const p1 = handleRoute[i];
       const p2 = handleRoute[i + 1];
@@ -761,15 +790,19 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
         }}
       />
 
-      {/* 2. Draw.io Style Selected Path Highlight */}
+      {/* 2. Destaque da linha selecionada. Com UMA linha selecionada, os
+          traços "andam" da origem para o destino (animação só de CSS, só nesta
+          linha), mostrando o sentido do fluxo. Em seleção de várias fica
+          parado, para não pesar. */}
       {selected && !draggingHandle && (
         <path
           d={path}
           fill="none"
-          stroke="#0066ff"
+          stroke={isMultiSelect ? '#0066ff' : '#ffffff'}
           strokeWidth={1.5}
-          strokeDasharray="4,3"
-          className="pointer-events-none opacity-80"
+          strokeDasharray={isMultiSelect ? '4,3' : '6,8'}
+          strokeLinecap="round"
+          className={`pointer-events-none ${isMultiSelect ? 'opacity-80' : 'edge-flow-direction'}`}
         />
       )}
 
@@ -795,7 +828,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
       )}
 
       {/* 3. Interactive Handles (Endpoints + Segment Drag Handles) */}
-      {(selected || draggingHandle) && (
+      {showEditControls && (
         <g className="drawio-edge-interactive-handles">
           {/* Segment Drag Handles - Hidden during active drag to prevent jump/recalculation */}
           {!draggingHandle && segmentControls.map((ctrl) => (

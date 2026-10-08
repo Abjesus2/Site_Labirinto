@@ -509,3 +509,20 @@ html[data-theme="dark"] :is(.bg-rose-50, [class^="bg-rose-50/"], [class*=" bg-ro
 html[data-theme="dark"] :is(.hover\:bg-rose-100, [class^="hover:bg-rose-100/"], [class*=" hover:bg-rose-100/"]):hover:not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { background-color: color-mix(in srgb, #f43f5e 22%, #18181b) !important; }
 html[data-theme="dark"] :is(.border-rose-300, [class^="border-rose-300/"], [class*=" border-rose-300/"]):not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { border-color: color-mix(in srgb, #f43f5e 55%, #18181b) !important; }
 html[data-theme="dark"] :is(.text-rose-900, [class^="text-rose-900/"], [class*=" text-rose-900/"]):not(.react-flow__node):not(.react-flow__node *):not(.keep-colors):not(.keep-colors *) { color: #ffe4e6 !important; }
+
+/* Linha selecionada: traços que "andam" da origem para o destino, mostrando
+   o sentido do fluxo. Só stroke-dashoffset (barato) e só na linha
+   selecionada; quem pede menos movimento no sistema vê os traços parados. */
+.edge-flow-direction {
+  animation: edge-flow-direction 0.7s linear infinite;
+}
+@keyframes edge-flow-direction {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .edge-flow-direction {
+    animation: none;
+  }
+}

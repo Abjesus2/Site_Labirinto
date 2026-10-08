@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Handle, Position, NodeResizer } from '@xyflow/react';
+import { Handle, Position, NodeResizer as FlowNodeResizer } from '@xyflow/react';
+import { useIsMultiSelect } from '../lib/selectionMode';
 import { MultipleHandles } from './MultipleHandles';
 import {
   Database,
@@ -17,6 +18,12 @@ import {
 import { NodeTiming } from '../types';
 import { formatDuration } from '../utils/timingUtils';
 import { useNavigationMode } from '../lib/navigationMode';
+
+// Alças de redimensionar só com UMA forma selecionada (ver lib/selectionMode).
+const NodeResizer: React.FC<React.ComponentProps<typeof FlowNodeResizer>> = (props) => {
+  const multi = useIsMultiSelect();
+  return <FlowNodeResizer {...props} isVisible={!!props.isVisible && !multi} />;
+};
 
 // Quick Add connector button component - Disabled to prevent flashing unwanted dots
 const QuickAddButtons = (_: { nodeId: string; isSelected?: boolean }) => {
@@ -362,7 +369,7 @@ export const ProcessNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-4 py-3 shadow-sm border-2 flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full px-4 py-3 shadow-sm border-2 flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-blue-400/50 shadow-md border-blue-500' : 'border-blue-300 hover:border-blue-400'
         } ${isDashed ? 'border-dashed' : isDotted ? 'border-dotted' : ''}`}
         style={{
@@ -409,7 +416,7 @@ export const StartNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-5 py-2.5 shadow-sm rounded-full border-2 flex items-center justify-center text-center font-semibold transition-all ${
+        className={`w-full h-full px-5 py-2.5 shadow-sm rounded-full border-2 flex items-center justify-center text-center font-semibold transition-colors ${
           selected ? 'ring-3 ring-green-400/50 shadow-md border-green-600' : 'border-green-400 hover:border-green-500'
         }`}
         style={{
@@ -453,7 +460,7 @@ export const EndNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-5 py-2.5 shadow-sm rounded-full border-2 flex items-center justify-center text-center font-semibold transition-all ${
+        className={`w-full h-full px-5 py-2.5 shadow-sm rounded-full border-2 flex items-center justify-center text-center font-semibold transition-colors ${
           selected ? 'ring-3 ring-red-400/50 shadow-md border-red-600' : 'border-red-400 hover:border-red-500'
         }`}
         style={{
@@ -501,7 +508,7 @@ export const DecisionNode = ({ id, data, type, selected }: any) => {
       />
 
       <svg
-        className={`absolute inset-0 w-full h-full overflow-visible transition-all ${
+        className={`absolute inset-0 w-full h-full overflow-visible transition-colors ${
           selected ? 'filter drop-shadow-[0_0_6px_rgba(234,179,8,0.6)]' : ''
         }`}
         viewBox="0 0 100 100"
@@ -555,7 +562,7 @@ export const DatabaseNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full relative flex flex-col items-center justify-center px-4 py-3 rounded-lg border-2 shadow-sm transition-all ${
+        className={`w-full h-full relative flex flex-col items-center justify-center px-4 py-3 rounded-lg border-2 shadow-sm transition-colors ${
           selected ? 'ring-3 ring-purple-400/50 shadow-md border-purple-600' : 'border-purple-300 hover:border-purple-400'
         }`}
         style={{
@@ -612,7 +619,7 @@ export const DocumentNode = ({ id, data, type, selected }: any) => {
       />
 
       <svg
-        className={`absolute inset-0 w-full h-full overflow-visible transition-all ${
+        className={`absolute inset-0 w-full h-full overflow-visible transition-colors ${
           selected ? 'filter drop-shadow-[0_0_6px_rgba(249,115,22,0.6)]' : ''
         }`}
         viewBox="0 0 100 100"
@@ -722,7 +729,7 @@ export const SubprocessNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full relative px-6 py-3 shadow-sm rounded-lg border-2 flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full relative px-6 py-3 shadow-sm rounded-lg border-2 flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-indigo-400/50 shadow-md border-indigo-600' : 'border-indigo-300 hover:border-indigo-400'
         }`}
         style={{
@@ -768,7 +775,7 @@ export const InputOutputNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-6 py-3 shadow-sm border-2 flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full px-6 py-3 shadow-sm border-2 flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-teal-400/50 shadow-md border-teal-600' : 'border-teal-300 hover:border-teal-400'
         }`}
         style={{
@@ -814,7 +821,7 @@ export const CloudNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-6 py-4 shadow-sm rounded-3xl border-2 flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full px-6 py-4 shadow-sm rounded-3xl border-2 flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-purple-400/50 shadow-md border-purple-500' : 'border-purple-300 hover:border-purple-400'
         }`}
         style={{
@@ -860,7 +867,7 @@ export const CircleNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full shadow-sm rounded-full border-2 flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full shadow-sm rounded-full border-2 flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-blue-400/50 shadow-md border-blue-600' : 'border-blue-300 hover:border-blue-400'
         }`}
         style={{
@@ -889,7 +896,7 @@ export const CircleNode = ({ id, data, type, selected }: any) => {
 export const TextNode = ({ id, data, type, selected }: any) => {
   return (
     <div
-      className={`p-2 rounded font-sans transition-all w-full h-full ${
+      className={`p-2 rounded font-sans transition-colors w-full h-full ${
         selected ? 'ring-2 ring-blue-500 bg-blue-50/30' : 'hover:bg-zinc-100/50'
       }`}
       style={{
@@ -928,7 +935,7 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
 
   return (
     <div
-      className={`w-full h-full min-w-[160px] min-h-[60px] border-2 border-dashed rounded-xl shadow-xs transition-all relative flex flex-col ${
+      className={`w-full h-full min-w-[160px] min-h-[60px] border-2 border-dashed rounded-xl shadow-xs transition-colors relative flex flex-col ${
         selected ? 'border-blue-500 ring-3 ring-blue-300/40 shadow-md' : 'border-zinc-300 hover:border-zinc-400'
       }`}
       style={{
@@ -973,7 +980,7 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
 export const FrameNode = ({ id, data, type, selected }: any) => {
   return (
     <div
-      className={`w-full h-full min-w-[200px] min-h-[120px] border-2 border-dashed rounded-2xl transition-all relative ${
+      className={`w-full h-full min-w-[200px] min-h-[120px] border-2 border-dashed rounded-2xl transition-colors relative ${
         selected ? 'border-blue-500 ring-3 ring-blue-300/40 shadow-lg' : 'border-zinc-400/60 hover:border-zinc-400'
       }`}
       style={{
@@ -1032,7 +1039,7 @@ export const PreparationNode = ({ id, data, type, selected }: any) => {
       />
 
       <svg
-        className={`absolute inset-0 w-full h-full overflow-visible transition-all ${
+        className={`absolute inset-0 w-full h-full overflow-visible transition-colors ${
           selected ? 'filter drop-shadow-[0_0_6px_rgba(2,132,199,0.6)]' : ''
         }`}
         viewBox="0 0 100 100"
@@ -1091,7 +1098,7 @@ export const ManualInputNode = ({ id, data, type, selected }: any) => {
       />
 
       <svg
-        className={`absolute inset-0 w-full h-full overflow-visible transition-all ${
+        className={`absolute inset-0 w-full h-full overflow-visible transition-colors ${
           selected ? 'filter drop-shadow-[0_0_6px_rgba(100,116,139,0.6)]' : ''
         }`}
         viewBox="0 0 100 100"
@@ -1150,7 +1157,7 @@ export const ManualOpNode = ({ id, data, type, selected }: any) => {
       />
 
       <svg
-        className={`absolute inset-0 w-full h-full overflow-visible transition-all ${
+        className={`absolute inset-0 w-full h-full overflow-visible transition-colors ${
           selected ? 'filter drop-shadow-[0_0_6px_rgba(217,119,6,0.6)]' : ''
         }`}
         viewBox="0 0 100 100"
@@ -1209,7 +1216,7 @@ export const DisplayNode = ({ id, data, type, selected }: any) => {
       />
 
       <svg
-        className={`absolute inset-0 w-full h-full overflow-visible transition-all ${
+        className={`absolute inset-0 w-full h-full overflow-visible transition-colors ${
           selected ? 'filter drop-shadow-[0_0_6px_rgba(8,145,178,0.6)]' : ''
         }`}
         viewBox="0 0 100 100"
@@ -1264,7 +1271,7 @@ export const DelayNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-5 py-3 border-2 shadow-sm rounded-r-full flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full px-5 py-3 border-2 shadow-sm rounded-r-full flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-rose-400/50 shadow-md border-rose-600' : 'border-rose-300 hover:border-rose-400'
         }`}
         style={{
@@ -1308,7 +1315,7 @@ export const InternalStorageNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full relative px-5 py-3 border-2 shadow-sm rounded-md flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full relative px-5 py-3 border-2 shadow-sm rounded-md flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-emerald-400/50 shadow-md border-emerald-600' : 'border-emerald-300 hover:border-emerald-400'
         }`}
         style={{
@@ -1354,7 +1361,7 @@ export const StoredDataNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-5 py-3 border-2 shadow-sm rounded-r-2xl border-l-8 flex items-center justify-center text-center font-medium transition-all ${
+        className={`w-full h-full px-5 py-3 border-2 shadow-sm rounded-r-2xl border-l-8 flex items-center justify-center text-center font-medium transition-colors ${
           selected ? 'ring-3 ring-violet-400/50 shadow-md border-violet-600' : 'border-violet-300 hover:border-violet-400'
         }`}
         style={{
@@ -1398,7 +1405,7 @@ export const OffPageNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full px-3 py-2 border-2 shadow-sm flex items-center justify-center text-center font-semibold transition-all ${
+        className={`w-full h-full px-3 py-2 border-2 shadow-sm flex items-center justify-center text-center font-semibold transition-colors ${
           selected ? 'ring-3 ring-blue-400/50 shadow-md border-blue-600' : 'border-blue-400 hover:border-blue-500'
         }`}
         style={{
@@ -1465,7 +1472,7 @@ export const AnnotationNode = ({ id, data, type, selected }: any) => {
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
       <div
-        className={`w-full h-full pl-3 pr-2 py-2 border-l-4 border-dashed rounded-r-lg shadow-2xs flex items-center text-left font-sans italic text-xs transition-all ${
+        className={`w-full h-full pl-3 pr-2 py-2 border-l-4 border-dashed rounded-r-lg shadow-2xs flex items-center text-left font-sans italic text-xs transition-colors ${
           selected ? 'ring-2 ring-amber-400 bg-amber-50/60' : 'hover:bg-amber-50/30'
         }`}
         style={{

@@ -1,4 +1,5 @@
-import { getLocalDiagram, saveLocalDiagram } from '../lib/storage';
+import { getLocalDiagram, saveLocalDiagram, updateLocalDiagram } from '../lib/storage';
+import { createVersionChangeTracker } from '../lib/versionChangeTracker';
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   ReactFlow,
@@ -120,6 +121,7 @@ import { COMPLETE_MARKER, mergeGeneratedPart } from '../lib/compactFormat';
 import { assignFlowHandles } from '../utils/flowHandles';
 import { presentationOrder, absolutePosition } from '../utils/presentationOrder';
 import { clearTransientFlags } from '../utils/transientFlags';
+import { MultiSelectContext } from '../lib/selectionMode';
 import {
   buildClip,
   collectSelection,
@@ -547,6 +549,11 @@ function useStableCallback<T extends (...args: any[]) => any>(fn: T): T {
   return useCallback(((...args: any[]) => ref.current(...args)) as T, []);
 }
 
+/** Seleciona só `id`, sem recriar os itens cuja seleção não muda. */
+function selectOnly<T extends { id: string; selected?: boolean }>(items: T[], id: string): T[] {
+  return items.map((i) => (!!i.selected === (i.id === id) ? i : { ...i, selected: i.id === id }));
+}
+
 /** Desmarca tudo sem recriar os itens que já estavam desmarcados. */
 function unselectAll<T extends { selected?: boolean }>(items: T[]): T[] {
   return items.some((i) => i.selected) ? items.map((i) => (i.selected ? { ...i, selected: false } : i)) : items;
@@ -583,18 +590,12 @@ const loadLaneOrientationPref = (): LaneOrientation => {
 const scopeIsEmpty = (scope: 'todas' | 'atual', totalAll: number, current: number, activeV?: { edges?: any[] }): boolean =>
   scope === 'todas' ? totalAll === 0 : current === 0 && !(activeV?.edges?.length);
 
-/** Conteúdo do fluxo sem o que é só da tela (seleção, arraste, medidas). */
-const FLOW_UI_ONLY_KEYS = new Set(['selected', 'dragging', 'measured', 'resizing']);
-const flowContentSignature = (versions: unknown): string => {
-  try {
-    return JSON.stringify(versions ?? null, (key, value) => (FLOW_UI_ONLY_KEYS.has(key) ? undefined : value));
-  } catch {
-    return String(Math.random());
-  }
-};
 
 function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const isConnecting = useStore((s) => s.connection.inProgress);
+  // Seleção por caixa em andamento: o painel lateral só aparece/atualiza ao
+  // soltar (antes era refeito a cada forma que entrava na caixa).
+  const isBoxSelecting = useStore((s) => s.userSelectionActive);
   const [nodes, setNodesState] = useState<Node[]>([]);
   // Toda troca da lista inteira (abrir, desfazer/refazer, trocar de versão,
   // importar...) chega sem marcas de "arrastando"/"redimensionando" — ver
@@ -884,37 +885,82 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     }
   }, [diagramId]);
 
-  // Debounced Save to Firestore
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Salvamento automático (local). DESEMPENHO em fluxos/bibliotecas grandes:
+  // espera 400ms sem alterações, grava quando o navegador fica ocioso, lê e
+  // grava a biblioteca uma vez só e compara só a versão que mudou (ver
+  // versionChangeTracker). Ao sair do editor ou fechar a aba, o que estiver
+  // pendente é gravado na hora.
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveIdleRef = useRef<number | null>(null);
+  const pendingSaveRef = useRef<(() => void) | null>(null);
+  const versionTrackerRef = useRef<{ id: string; changed: ReturnType<typeof createVersionChangeTracker> } | null>(null);
+
+  const cancelScheduledSave = () => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    if (saveIdleRef.current !== null && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(saveIdleRef.current);
+    saveTimeoutRef.current = null;
+    saveIdleRef.current = null;
+  };
 
   const saveToCloud = useCallback((vName: string, vNodes: Node[], vEdges: Edge[], allV = versions, timingMode = showTimingMode) => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    cancelScheduledSave();
     setIsSaving(true);
     setSaveError(false);
-    
-    saveTimeoutRef.current = setTimeout(() => {
+
+    const run = () => {
+      cancelScheduledSave();
+      pendingSaveRef.current = null;
       const newVersions = { ...allV, [vName]: { nodes: clearTransientFlags(vNodes), edges: vEdges } };
-      const data = getLocalDiagram(diagramId);
-      if (data) {
-        // Lembrete de backup só começa a contar com alteração de verdade
-        // (selecionar, passar o mouse ou reabrir o fluxo não contam).
-        if (flowContentSignature(data.versions) !== flowContentSignature(newVersions)) backupReminder.markChanged();
-        data.versions = newVersions;
-        data.activeVersion = vName;
-        data.showTimingMode = Boolean(timingMode);
-        data.updatedAt = Date.now();
-        saveLocalDiagram(data);
+      if (versionTrackerRef.current?.id !== diagramId) {
+        versionTrackerRef.current = { id: diagramId, changed: createVersionChangeTracker() };
       }
-      saveTimeoutRef.current = null;
-      setIsSaving(false);
-      setSaveError(false);
+      let contentChanged = false;
+      try {
+        updateLocalDiagram(diagramId, (data) => {
+          // Lembrete de backup só começa a contar com alteração de verdade
+          // (selecionar, passar o mouse ou reabrir o fluxo não contam).
+          contentChanged = versionTrackerRef.current!.changed(data.versions as any, newVersions);
+          data.versions = newVersions;
+          data.activeVersion = vName;
+          data.showTimingMode = Boolean(timingMode);
+          data.updatedAt = Date.now();
+        });
+        if (contentChanged) backupReminder.markChanged();
+        setIsSaving(false);
+        setSaveError(false);
+      } catch {
+        // Ex.: espaço do navegador cheio — mostra o aviso de erro no "Salvo".
+        setIsSaving(false);
+        setSaveError(true);
+      }
+    };
+
+    pendingSaveRef.current = run;
+    saveTimeoutRef.current = setTimeout(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        saveIdleRef.current = window.requestIdleCallback(() => pendingSaveRef.current?.(), { timeout: 1000 });
+      } else {
+        pendingSaveRef.current?.();
+      }
     }, 400);
   }, [diagramId, versions, showTimingMode, title, backupReminder.markChanged]);
+
+  // Grava na hora o que estiver pendente ao sair do editor ou esconder a aba.
+  useEffect(() => {
+    const flush = () => pendingSaveRef.current?.();
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, []);
 
   // Prevent closing tab when save is pending or in progress
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (saveTimeoutRef.current || isSaving) {
+      // Alteração ainda não gravada: grava agora (não precisa perguntar).
+      if (pendingSaveRef.current) pendingSaveRef.current();
+      if (saveTimeoutRef.current) {
         e.preventDefault();
         e.returnValue = ''; // Required for some browsers
         return '';
@@ -1158,6 +1204,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const hasSelectedEdge = edges.some(e => e.selected) || !!selectedEdge;
   const currentlySelectedNode = selectedNodesList.length > 0 ? selectedNodesList[0] : null;
   const hasActiveSelection = selectedNodesList.length > 0 || selectedEdgesList.length > 0;
+  // Vários itens selecionados: formas e linhas escondem os controles de
+  // edição individuais (ver lib/selectionMode).
+  const isMultiSelect = selectedNodesList.length + selectedEdgesList.length > 1;
 
   // ---------------------------------------------------------------------
   // MODO APRESENTAÇÃO: etapas na ordem do fluxo (ver utils/presentationOrder).
@@ -1182,7 +1231,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     if (!target) return;
     setPresentationNodeId(nodeId);
     if (select) {
-      setNodes((nds) => nds.map((n) => (n.selected === (n.id === nodeId) ? n : { ...n, selected: n.id === nodeId })));
+      setNodes((nds) => selectOnly(nds, nodeId));
       setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
       setSelectedEdge(null);
     }
@@ -2120,7 +2169,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       // Exclusivo: desmarca todas as linhas e seleciona apenas este nó
       setSelectedEdge(null);
       setEdges((eds) => unselectAll(eds));
-      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === clickedNode.id })));
+      // Só recria as formas cuja seleção muda (recriar todas fazia as 302
+      // formas de um fluxo grande se redesenharem a cada clique).
+      setNodes((nds) => selectOnly(nds, clickedNode.id));
     }
     // Quando isMultiKey (Ctrl/Meta/Shift), o próprio React Flow já
     // adiciona/remove este nó do multi-select ao processar o clique
@@ -5002,7 +5053,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             embaixo do botão "Mostrar barra" (e do alerta de backup) no canto.
             No celular a largura deixa livre a barra de ferramentas da esquerda
             (72px), em vez de cobri-la. */}
-        {hasActiveSelection && isRightSidebarOpen && !isPresentationMode && (
+        {hasActiveSelection && isRightSidebarOpen && !isPresentationMode && !isBoxSelecting && (
           <aside data-right-sidebar className={`absolute right-2 sm:right-3 ${headerHidden ? 'top-12' : 'top-3'} bottom-16 w-[min(20rem,calc(100vw-80px))] sm:w-84 z-40 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-zinc-200/90 flex flex-col overflow-hidden animate-in fade-in slide-in-from-right-4 duration-200`}>
             {selectedNodesList.length > 0 && selectedEdgesList.length === 0 ? (
               <MiroNodeToolbar
@@ -5054,7 +5105,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
         )}
 
         {/* COMPACT FLOATING TAB BUTTON ON RIGHT EDGE WHEN SIDEBAR IS HIDDEN */}
-        {hasActiveSelection && !isRightSidebarOpen && !isPresentationMode && (
+        {hasActiveSelection && !isRightSidebarOpen && !isPresentationMode && !isBoxSelecting && (
           <button
             onClick={() => setIsRightSidebarOpen(true)}
             className="absolute right-0 top-1/2 -translate-y-1/2 bg-white border border-zinc-200 shadow-xl rounded-l-2xl px-2.5 py-3 text-blue-600 hover:bg-blue-50 font-bold z-40 flex flex-col items-center gap-1.5 text-xs transition-all cursor-pointer hover:pl-3"
@@ -5067,6 +5118,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
 
         {/* MAIN REACT FLOW CANVAS */}
         <main className="w-full h-full">
+          <MultiSelectContext.Provider value={isMultiSelect}>
           <ReactFlow
             nodes={enrichedNodes}
             edges={enrichedEdges}
@@ -5238,6 +5290,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
               </Panel>
             )}
           </ReactFlow>
+          </MultiSelectContext.Provider>
         </main>
       </div>
 
@@ -5259,7 +5312,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
           const targetNode = nodes.find(n => n.id === nodeId);
           if (targetNode) {
             setCenter(targetNode.position.x + 100, targetNode.position.y + 30, { zoom: 1.3, duration: 500 });
-            if (!isNavigationMode) setNodes(nds => nds.map(n => ({ ...n, selected: n.id === nodeId })));
+            if (!isNavigationMode) setNodes(nds => selectOnly(nds, nodeId));
           }
         }}
         onOpenTimingModal={isNavigationMode ? () => {} : (nodeId) => setTimingModalNodeId(nodeId)}

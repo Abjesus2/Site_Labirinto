@@ -55,3 +55,18 @@ export const getLocalDiagram = (id: string): Diagram | null => {
   const diagrams = getLocalDiagrams();
   return diagrams.find(d => d.id === id) || null;
 };
+
+/**
+ * Altera UM diagrama lendo e gravando a biblioteca uma vez só (antes o
+ * salvamento automático lia tudo duas vezes — getLocalDiagram +
+ * saveLocalDiagram — e o custo crescia com o total de diagramas guardados).
+ * Devolve o diagrama gravado, ou null se ele não existir.
+ */
+export const updateLocalDiagram = (id: string, update: (diagram: Diagram) => void): Diagram | null => {
+  const diagrams = getLocalDiagrams();
+  const diagram = diagrams.find(d => d.id === id);
+  if (!diagram) return null;
+  update(diagram);
+  localStorage.setItem(DIAGRAMS_KEY, JSON.stringify(diagrams));
+  return diagram;
+};

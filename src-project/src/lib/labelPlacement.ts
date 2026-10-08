@@ -33,6 +33,44 @@ export const NODE_MARGIN = 4;
 
 type Dims = { width: number; height: number };
 
+/** Áreas (forma e selo de tempo) que UMA forma ocupa, para a etiqueta evitar. */
+export const nodeLabelObstacles = (node: any, parent: any, getDims: (type?: string) => Dims): Rect[] => {
+  if (!node || !node.position) return [];
+  if (node.type === 'swimlane' || node.type === 'frame') return [];
+
+  const dims = getDims(node.type);
+  const w = Number(node.measured?.width || node.width || node.style?.width || dims.width);
+  const h = Number(node.measured?.height || node.height || node.style?.height || dims.height);
+
+  let x = node.position.x || 0;
+  let y = node.position.y || 0;
+  if (parent) {
+    x += parent.position?.x || 0;
+    y += parent.position?.y || 0;
+  }
+
+  const rects: Rect[] = [
+    {
+      left: x - NODE_MARGIN,
+      right: x + w + NODE_MARGIN,
+      top: y - NODE_MARGIN,
+      bottom: y + h + NODE_MARGIN,
+    },
+  ];
+
+  if (node.data?.showTimingMode) {
+    const cx = x + w / 2;
+    const top = y + h + BADGE_GAP;
+    rects.push({
+      left: cx - BADGE_WIDTH / 2,
+      right: cx + BADGE_WIDTH / 2,
+      top,
+      bottom: top + BADGE_HEIGHT,
+    });
+  }
+  return rects;
+};
+
 /** Formas e selos de tempo que a etiqueta precisa evitar. */
 export const collectLabelObstacles = (
   nodes: any[],
@@ -45,45 +83,53 @@ export const collectLabelObstacles = (
 
   const obstacles: Rect[] = [];
   for (const node of nodes) {
-    if (!node || !node.position) continue;
-    // Raias e quadros são fundos: a etiqueta pode ficar sobre eles
-    if (node.type === 'swimlane' || node.type === 'frame') continue;
-
-    const dims = getDims(node.type);
-    const w = Number(node.measured?.width || node.width || node.style?.width || dims.width);
-    const h = Number(node.measured?.height || node.height || node.style?.height || dims.height);
-
-    // Forma dentro de raia/quadro: a posição é relativa ao pai
-    let x = node.position.x || 0;
-    let y = node.position.y || 0;
+    if (!node) continue;
     const parent = node.parentId ? byId.get(node.parentId) : null;
-    if (parent) {
-      x += parent.position?.x || 0;
-      y += parent.position?.y || 0;
-    }
-
-    // Corpo da forma
-    obstacles.push({
-      left: x - NODE_MARGIN,
-      right: x + w + NODE_MARGIN,
-      top: y - NODE_MARGIN,
-      bottom: y + h + NODE_MARGIN,
-    });
-
-    // Selo de tempo, logo abaixo da forma
-    if (node.data?.showTimingMode) {
-      const cx = x + w / 2;
-      const top = y + h + BADGE_GAP;
-      obstacles.push({
-        left: cx - BADGE_WIDTH / 2,
-        right: cx + BADGE_WIDTH / 2,
-        top,
-        bottom: top + BADGE_HEIGHT,
-      });
-    }
+    obstacles.push(...nodeLabelObstacles(node, parent, getDims));
   }
   return obstacles;
 };
+
+/**
+ * Índice dos obstáculos por forma, reaproveitando os mesmos objetos enquanto
+ * a forma não muda de lugar/tamanho (selecionar ou editar o texto não conta).
+ * DESEMPENHO: cada linha com texto observa só os obstáculos perto dela; com
+ * objetos estáveis, ela só é redesenhada quando uma forma PRÓXIMA se move.
+ */
+export const createObstacleIndex = (getDims: (type?: string) => Dims) => {
+  let byId = new Map<string, { key: string; rects: Rect[] }>();
+  const perList = new WeakMap<object, Rect[][]>();
+  return (nodes: any[]): Rect[][] => {
+    const hit = perList.get(nodes);
+    if (hit) return hit;
+    const lookup = new Map<string, any>();
+    for (const n of nodes) if (n) lookup.set(n.id, n);
+    const next = new Map<string, { key: string; rects: Rect[] }>();
+    const groups: Rect[][] = [];
+    for (const n of nodes) {
+      if (!n || n.type === 'swimlane' || n.type === 'frame') continue;
+      const parent = n.parentId ? lookup.get(n.parentId) : null;
+      const key = [
+        n.type, n.position?.x, n.position?.y, n.measured?.width, n.measured?.height, n.width, n.height,
+        n.style?.width, n.style?.height, n.data?.showTimingMode ? 1 : 0, parent?.position?.x, parent?.position?.y,
+      ].join('|');
+      const prev = byId.get(n.id);
+      const entry = prev && prev.key === key ? prev : { key, rects: nodeLabelObstacles(n, parent, getDims) };
+      next.set(n.id, entry);
+      if (entry.rects.length) groups.push(entry.rects);
+    }
+    byId = next;
+    perList.set(nodes, groups);
+    return groups;
+  };
+};
+
+/** Grupos de obstáculos que encostam na área (as mesmas referências do índice). */
+export const groupsTouching = (groups: Rect[][], area: Rect): Rect[][] =>
+  groups.filter((g) => g.some((r) => r.left < area.right && r.right > area.left && r.top < area.bottom && r.bottom > area.top));
+
+/** Mesma lista (mesmos itens, mesma ordem)? */
+export const sameItems = <T>(a: T[], b: T[]): boolean => a === b || (a.length === b.length && a.every((x, i) => x === b[i]));
 
 const boxAt = (x: number, y: number, width: number, height: number): Rect => ({
   left: x - width / 2,
