@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Handle, Position, NodeResizer as FlowNodeResizer } from '@xyflow/react';
+import { Handle, Position, NodeResizer as FlowNodeResizer, NodeResizeControl, ResizeControlVariant } from '@xyflow/react';
 import { useIsMultiSelect } from '../lib/selectionMode';
 import { MultipleHandles } from './MultipleHandles';
 import {
@@ -929,6 +929,42 @@ const ContainerBorderHandles = () => (
   </>
 );
 
+/**
+ * Raias e quadros: alças no MEIO de cada lado. As da esquerda/direita mudam
+ * só a largura; as de cima/baixo, só a altura (os cantos continuam mudando
+ * as duas). A borda de 1px do redimensionador padrão ficava por baixo da
+ * área de arrastar a raia e não dava para pegar.
+ */
+const SIDE_HANDLES = [
+  { position: 'top', width: 28, height: 8, title: 'Arraste para mudar só a altura' },
+  { position: 'bottom', width: 28, height: 8, title: 'Arraste para mudar só a altura' },
+  { position: 'left', width: 8, height: 28, title: 'Arraste para mudar só a largura' },
+  { position: 'right', width: 8, height: 28, title: 'Arraste para mudar só a largura' },
+] as const;
+
+const ContainerSideResizers = ({ id, selected, minWidth, minHeight }: { id: string; selected: boolean; minWidth: number; minHeight: number }) => {
+  const multi = useIsMultiSelect();
+  if (!selected || multi) return null;
+  return (
+    <>
+      {SIDE_HANDLES.map((h) => (
+        <NodeResizeControl
+          key={h.position}
+          position={h.position}
+          variant={ResizeControlVariant.Handle}
+          minWidth={minWidth}
+          minHeight={minHeight}
+          className="container-side-handle"
+          style={{ width: h.width, height: h.height, background: '#ffffff', border: '2px solid #2563eb', borderRadius: 4, zIndex: 101, pointerEvents: 'auto' }}
+          onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
+        >
+          <span className="sr-only">{h.title}</span>
+        </NodeResizeControl>
+      ))}
+    </>
+  );
+};
+
 // Swimlane Node
 export const SwimlaneNode = ({ id, data, type, selected }: any) => {
   const isVertical = data.orientation === 'vertical' || data.styleOverride?.orientation === 'vertical';
@@ -954,6 +990,7 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
         handleClassName="w-3.5 h-3.5 bg-white border-2 border-blue-600 rounded-sm shadow-md z-50 hover:scale-125 transition-transform cursor-pointer"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
+      <ContainerSideResizers id={id} selected={selected} minWidth={160} minHeight={60} />
       <ContainerBorderHandles />
       <div
         className="lane-drag-handle bg-zinc-100/90 border-b border-zinc-200/90 px-3.5 py-2 rounded-t-lg font-semibold text-xs text-zinc-700 flex items-center justify-between select-none shrink-0 cursor-move"
@@ -998,6 +1035,7 @@ export const FrameNode = ({ id, data, type, selected }: any) => {
         handleClassName="w-3.5 h-3.5 bg-white border-2 border-blue-600 rounded-sm shadow-md z-50 hover:scale-125 transition-transform cursor-pointer"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
+      <ContainerSideResizers id={id} selected={selected} minWidth={200} minHeight={120} />
       <ContainerBorderHandles />
       <div
         className="lane-drag-handle absolute top-2 left-2 right-2 px-3 py-1 bg-zinc-800 text-white rounded-md text-xs font-semibold shadow-md flex items-center gap-1.5 select-none z-10 max-w-[calc(100%-1rem)] cursor-move"
