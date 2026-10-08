@@ -119,6 +119,7 @@ import { FIXED_VERSIONS, isFixedVersion, guessTargetVersion, normalizeVersions }
 import { COMPLETE_MARKER, mergeGeneratedPart } from '../lib/compactFormat';
 import { assignFlowHandles } from '../utils/flowHandles';
 import { presentationOrder, absolutePosition } from '../utils/presentationOrder';
+import { clearTransientFlags } from '../utils/transientFlags';
 import {
   buildClip,
   collectSelection,
@@ -594,7 +595,14 @@ const flowContentSignature = (versions: unknown): string => {
 
 function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const isConnecting = useStore((s) => s.connection.inProgress);
-  const [nodes, setNodes] = useState<Node[]>([]);
+  const [nodes, setNodesState] = useState<Node[]>([]);
+  // Toda troca da lista inteira (abrir, desfazer/refazer, trocar de versão,
+  // importar...) chega sem marcas de "arrastando"/"redimensionando" — ver
+  // clearTransientFlags. Atualizações por função (o arraste em andamento)
+  // passam direto.
+  const setNodes = useCallback((value: React.SetStateAction<Node[]>) => {
+    setNodesState(typeof value === 'function' ? value : clearTransientFlags(value));
+  }, []);
   // Cópia sempre atual dos nós para o cálculo das linhas-guia dentro de
   // onNodesChange (que não depende de "nodes" para não ser recriado a cada
   // pixel de arraste).
@@ -885,7 +893,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setSaveError(false);
     
     saveTimeoutRef.current = setTimeout(() => {
-      const newVersions = { ...allV, [vName]: { nodes: vNodes, edges: vEdges } };
+      const newVersions = { ...allV, [vName]: { nodes: clearTransientFlags(vNodes), edges: vEdges } };
       const data = getLocalDiagram(diagramId);
       if (data) {
         // Lembrete de backup só começa a contar com alteração de verdade
@@ -918,7 +926,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
   // Push state to Undo History with descriptive action name
   const pushHistory = useCallback((newNodes: Node[], newEdges: Edge[], actionName = 'Alteração no Fluxo') => {
-    const clonedNodes = JSON.parse(JSON.stringify(newNodes));
+    const clonedNodes = clearTransientFlags(JSON.parse(JSON.stringify(newNodes)));
     const clonedEdges = JSON.parse(JSON.stringify(newEdges));
 
     setHistory((prev) => {
