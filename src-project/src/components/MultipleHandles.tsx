@@ -2,6 +2,9 @@ import React from 'react';
 import { Handle } from '@xyflow/react';
 import { getShapeGeometry } from '../utils/shapeGeometry';
 
+// O "+" de cada ponto de conexão é desenhado só com CSS (::after do próprio
+// Handle, ver index.css). Antes eram 2 elementos extras por ponto — 48 por
+// forma, milhares num fluxo grande, o que deixava arrastar e rolar lento.
 export const MultipleHandles: React.FC<{ type?: string }> = ({ type = 'process' }) => {
   const geom = getShapeGeometry(type);
   const connectionPoints = geom.getConnectionPoints();
@@ -23,11 +26,7 @@ export const MultipleHandles: React.FC<{ type?: string }> = ({ type = 'process' 
               bottom: 'auto',
               transform: 'translate(-50%, -50%)', // Use -50% to properly center on the point
             }}
-          >
-            <span className="connection-handle-ui">
-              <span className="connection-handle-plus" />
-            </span>
-          </Handle>
+          />
         ))
       )}
     </>

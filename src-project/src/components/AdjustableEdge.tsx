@@ -9,8 +9,8 @@ import {
   EdgeLabelRenderer,
   Position,
   useReactFlow,
-  useViewport,
-  useNodes,
+  useStore,
+  useStoreApi,
   Node,
 } from '@xyflow/react';
 import {
@@ -20,6 +20,23 @@ import { getNodeDimensions } from './CustomNodes';
 import { collectLabelObstacles, placeEdgeLabel, pointAtFraction, fractionOfPoint } from '../lib/labelPlacement';
 import { showToast } from '../lib/embedCompat';
 import { useNavigationMode } from '../lib/navigationMode';
+
+// DESEMPENHO (fluxos grandes): cada linha só se redesenha quando ela mesma
+// muda. Só as linhas COM texto acompanham a lista de formas (o texto desvia
+// das formas), e os obstáculos são calculados uma vez por mudança e
+// compartilhados entre todas as linhas, em vez de uma vez por linha.
+const NO_NODES: Node[] = [];
+const obstacleCache = new WeakMap<object, ReturnType<typeof collectLabelObstacles>>();
+const sharedLabelObstacles = (nodes: Node[]) => {
+  let cached = obstacleCache.get(nodes);
+  if (!cached) {
+    cached = collectLabelObstacles(nodes as any[], getNodeDimensions);
+    obstacleCache.set(nodes, cached);
+  }
+  return cached;
+};
+const allNodesSelector = (s: { nodes: Node[] }) => s.nodes;
+const noNodesSelector = () => NO_NODES;
 import {
   resolveReconnectCandidate,
   isValidNodeHandleId,
@@ -125,10 +142,8 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   type = 'smoothstep',
 }) => {
   const { screenToFlowPosition, flowToScreenPosition, getEdges, getNodes } = useReactFlow();
-  const { zoom } = useViewport();
+  const storeApi = useStoreApi();
   const isNavigationMode = useNavigationMode();
-  // Lista reativa: muda a cada movimento de forma, para recalcular os desvios
-  const liveNodes = useNodes();
   const edgeData = (data as AdjustableEdgeData) || {};
   const borderRadius = type === 'step' ? 0 : edgeData.borderRadius !== undefined ? edgeData.borderRadius : 16;
 
@@ -137,6 +152,8 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   const labelPolylineRef = useRef<EdgePoint[]>([]);
   const labelPosRef = useRef<EdgePoint>({ x: 0, y: 0 });
   const [labelText, setLabelText] = useState((label as string) || edgeData.label || '');
+  // Lista reativa só para linhas com texto (para o texto desviar das formas).
+  const liveNodes = useStore(String(labelText || '') ? allNodesSelector : noNodesSelector);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Dragging states for handles
@@ -203,7 +220,9 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
     points = removeCollinearPoints(points);
   } else {
     // Check if direct straight line can be used
-    const allNodes = getNodes();
+    // Lista do próprio React Flow (getNodes() copia todas as formas a cada
+    // chamada — feito em cada linha, pesava muito em fluxos grandes).
+    const allNodes = storeApi.getState().nodes;
     if (canUseDirectStraightPath({
       source: { x: currentSourceX, y: currentSourceY },
       target: { x: currentTargetX, y: currentTargetY },
@@ -325,10 +344,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
   // nem as formas nem os selos de tempo.
   const labelTextValue = String(labelText || '');
   const estimatedLabelWidth = Math.max(28, labelTextValue.length * 6.2 + 16);
-  const labelObstacles = React.useMemo(
-    () => collectLabelObstacles(liveNodes as any[], getNodeDimensions),
-    [liveNodes],
-  );
+  const labelObstacles = liveNodes === NO_NODES ? [] : sharedLabelObstacles(liveNodes);
   if (labelTextValue && !isEditingLabel && !isUserPlacedLabel && !labelDragPos) {
     const routeForLabel =
       points && points.length >= 2
@@ -866,7 +882,10 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
         </g>
       )}
 
-      {/* 4. On-Path Commands & Inline Text Editor */}
+      {/* 4. On-Path Commands & Inline Text Editor
+          (só monta o portal quando há texto/edição: cada portal fica
+          vigiando o quadro, e com centenas de linhas sem texto isso pesava) */}
+      {(isEditingLabel || labelText) && (
       <EdgeLabelRenderer>
         {isEditingLabel ? (
           <div
@@ -918,7 +937,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
                   // sobrepostos do mesmo losango).
                   zIndex: selected ? 2000 : 1500,
                 }}
-                className={`nodrag nopan select-none px-2 py-0.5 rounded text-[11px] font-medium text-zinc-800 bg-white/95 border border-zinc-200/90 shadow-2xs ${!isNavigationMode ? 'cursor-move' : ''} ${labelDragPos ? '' : 'transition-all'} ${
+                className={`nodrag nopan select-none px-2 py-0.5 rounded text-[11px] font-medium text-zinc-800 bg-white/95 border border-zinc-200/90 shadow-2xs ${!isNavigationMode ? 'cursor-move' : ''} ${labelDragPos ? '' : 'transition-colors'} ${
                   selected ? 'ring-1 ring-blue-400 bg-blue-50/50' : 'hover:bg-white'
                 }`}
                 onPointerDown={onLabelPointerDown}
@@ -939,6 +958,7 @@ export const AdjustableEdge: React.FC<EdgeProps> = ({
           </>
         )}
       </EdgeLabelRenderer>
+      )}
     </>
   );
 };

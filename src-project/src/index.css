@@ -149,64 +149,30 @@ body.is-dragging-edge-handle .react-flow__node .react-flow__handle,
   background: transparent;
 }
 
-/* Interface visual do Handle - não altera as coordenadas da conexão */
-.connection-handle-ui {
+/* Interface visual do Handle (o "+") - não altera as coordenadas da conexão.
+   Desenhado só com CSS no ::after do próprio Handle (sem elementos extras:
+   eram 2 por ponto, milhares num fluxo grande). */
+.react-flow__handle.multi-handle::after {
+  --handle-plus: #3b82f6;
+  content: '';
   position: absolute;
   left: 50%;
   top: 50%;
   width: 28px;
   height: 28px;
-
   transform: translate(-50%, -50%);
   border-radius: 50%;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  background: transparent;
-  pointer-events: none !important;
-}
-
-/* O + visual */
-.connection-handle-plus {
-  position: relative;
-  display: block;
-  width: 14px;
-  height: 14px;
-  pointer-events: none !important;
-}
-
-.connection-handle-plus::before,
-.connection-handle-plus::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  background-color: #3b82f6;
-  transform: translate(-50%, -50%);
-  transition: background-color 0.15s ease;
-  pointer-events: none !important;
-}
-
-.connection-handle-plus::before {
-  width: 12px;
-  height: 3px;
-}
-
-.connection-handle-plus::after {
-  width: 3px;
-  height: 12px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--handle-plus), var(--handle-plus)) center / 12px 3px no-repeat,
+    linear-gradient(var(--handle-plus), var(--handle-plus)) center / 3px 12px no-repeat;
+  background-color: transparent;
 }
 
 /* Hover visual translúcido para não esconder a ponta da seta */
-.react-flow__handle.multi-handle:hover .connection-handle-ui {
-  background: rgba(34, 197, 94, 0.2);
-}
-
-.react-flow__handle.multi-handle:hover .connection-handle-plus::before,
-.react-flow__handle.multi-handle:hover .connection-handle-plus::after {
-  background-color: #16a34a;
+.react-flow__handle.multi-handle:hover::after {
+  --handle-plus: #16a34a;
+  background-color: rgba(34, 197, 94, 0.2);
 }
 
 /* Com uma linha selecionada, os "+" de conexão rápida das formas ficam fora

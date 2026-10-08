@@ -128,6 +128,8 @@ export function calculateCumulativeTimes(
 
   // Filter out non-process structural containers like frames/swimlanes if needed
   const flowNodes = nodes.filter(n => n.type !== 'swimlane' && n.type !== 'frame');
+  // Busca por id em O(1) (o .find em laço ficava quadrático em fluxos grandes).
+  const flowNodeById = new Map(flowNodes.map(n => [n.id, n]));
 
   // Adjacency map and in-degree map
   const inDegree: Record<string, number> = {};
@@ -172,7 +174,7 @@ export function calculateCumulativeTimes(
     const currId = queue.shift()!;
     orderedNodeIds.push(currId);
 
-    const currNode = flowNodes.find(n => n.id === currId);
+    const currNode = flowNodeById.get(currId);
     const timing: NodeTiming = currNode?.data?.timing || {};
     const stepTime = getStepTotalTime(timing);
     const prevCumulative = cumulativeMap[currId] || 0;
@@ -210,7 +212,7 @@ export function calculateCumulativeTimes(
   let totalExtra = 0;
 
   orderedNodeIds.forEach((id, index) => {
-    const node = flowNodes.find(n => n.id === id);
+    const node = flowNodeById.get(id);
     if (!node) return;
 
     const timing: NodeTiming = node.data?.timing || {};
@@ -257,7 +259,7 @@ export function calculateCumulativeTimes(
   const efficiency = grandTotalLeadTime > 0 ? Math.round((totalDuration / grandTotalLeadTime) * 100) : 100;
 
   const orderedNodes = orderedNodeIds
-    .map(id => flowNodes.find(n => n.id === id)!)
+    .map(id => flowNodeById.get(id)!)
     .filter(Boolean);
 
   return {

@@ -522,6 +522,44 @@ function AlignmentGuidesOverlay({ guides }: { guides: AlignmentGuidesState }) {
   );
 }
 
+/**
+ * Função com identidade fixa que sempre chama a versão mais recente de `fn`.
+ * DESEMPENHO: o React Flow repassa os callbacks (clique, reconectar...) para
+ * cada forma e cada linha; se a função muda a cada movimento, TODAS as formas
+ * e linhas se redesenham a cada quadro do arraste — em fluxos com centenas de
+ * formas isso deixava tudo travando.
+ */
+const alwaysValidConnection = () => true;
+const FIT_VIEW_OPTIONS = { padding: 0.25, duration: 400, minZoom: 0.02 };
+const SNAP_GRID: [number, number] = [10, 10];
+const MULTI_SELECTION_KEYS = ['Control', 'Meta', 'Shift'];
+const DEFAULT_EDGE_OPTIONS = {
+  type: 'smoothstep',
+  reconnectable: true,
+  markerEnd: { type: MarkerType.ArrowClosed, color: '#0f172a' },
+  style: { stroke: '#0f172a', strokeWidth: 2 },
+};
+
+function useStableCallback<T extends (...args: any[]) => any>(fn: T): T {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback(((...args: any[]) => ref.current(...args)) as T, []);
+}
+
+/** Desmarca tudo sem recriar os itens que já estavam desmarcados. */
+function unselectAll<T extends { selected?: boolean }>(items: T[]): T[] {
+  return items.some((i) => i.selected) ? items.map((i) => (i.selected ? { ...i, selected: false } : i)) : items;
+}
+
+/** Mesmos tempos calculados? (objetos novos a cada cálculo, comparados campo a campo) */
+const sameTiming = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const ka = Object.keys(a as object);
+  if (ka.length !== Object.keys(b as object).length) return false;
+  return ka.every((k) => (a as any)[k] === (b as any)[k]);
+};
+
 /** Tamanho de uma forma no desenho (medido, definido ou o padrão do tipo). */
 const shapeSize = (n: any): { width: number; height: number } => {
   const dim = getNodeDimensions(n.type);
@@ -1041,11 +1079,23 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, [edges, pushHistory, saveToCloud, activeVersion]);
 
   // Calculate Real-Time Cumulative Lead Times for nodes
+  // Os tempos só dependem das formas (tipo e tempos), das ligações e das
+  // configurações — não da posição nem da seleção. Arrastar uma forma não
+  // recalcula nada (antes recalculava o fluxo inteiro a cada quadro).
+  const timingKey = useMemo(() => {
+    const n = nodes.map((nd) => `${nd.id}|${nd.type}|${JSON.stringify(nd.data?.timing ?? '')}`).join('\n');
+    const e = edges.map((ed) => `${ed.source}>${ed.target}`).join(',');
+    return `${n}#${e}`;
+  }, [nodes, edges]);
+  const timingInputRef = useRef({ nodes, edges });
+  timingInputRef.current = { nodes, edges };
   const { nodeTimings, summary } = useMemo(() => {
-    return calculateCumulativeTimes(nodes, edges, timeSettings);
-  }, [nodes, edges, timeSettings]);
+    return calculateCumulativeTimes(timingInputRef.current.nodes, timingInputRef.current.edges, timeSettings);
+  }, [timingKey, timeSettings]);
 
   // Inject timing metadata and clean hierarchical zIndex into nodes before rendering
+  const enrichedNodeCacheRef = useRef(new WeakMap<Node, { timing: unknown; mode: boolean; out: Node }>());
+  const enrichedEdgeCacheRef = useRef(new WeakMap<Edge, Edge>());
   const enrichedNodes = useMemo(() => {
     const seenIds = new Set<string>();
     const uniqueNodes: Node[] = [];
@@ -1056,12 +1106,23 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       }
     }
 
+    // Reaproveita o objeto já montado de cada forma que não mudou: assim o
+    // React Flow só redesenha a forma alterada (antes, qualquer mudança —
+    // até arrastar uma forma — redesenhava todas).
+    const cache = enrichedNodeCacheRef.current;
+    const nextCache = new WeakMap<Node, { timing: unknown; mode: boolean; out: Node }>();
+    enrichedNodeCacheRef.current = nextCache;
     return uniqueNodes.map((node) => {
       const timingCalc = nodeTimings[node.id];
+      const hit = cache.get(node);
+      if (hit && hit.mode === showTimingMode && sameTiming(hit.timing, timingCalc)) {
+        nextCache.set(node, hit);
+        return hit.out;
+      }
       const isContainer = node.type === 'frame' || node.type === 'swimlane';
       const defaultZ = isContainer ? -10 : 10;
       const resolvedZ = node.zIndex !== undefined ? node.zIndex : defaultZ;
-      return {
+      const out: Node = {
         ...node,
         zIndex: resolvedZ,
         // Raia/Quadro só arrasta pela barra superior (nome) ou pelas bordas
@@ -1074,6 +1135,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           showTimingMode: showTimingMode
         }
       };
+      nextCache.set(node, { timing: timingCalc, mode: showTimingMode, out });
+      return out;
     });
   }, [nodes, nodeTimings, showTimingMode]);
 
@@ -1165,13 +1228,18 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         uniqueEdges.push(edge);
       }
     }
+    // Mesmo reaproveitamento das formas: só a linha alterada é redesenhada.
+    const cache = enrichedEdgeCacheRef.current;
+    const nextCache = new WeakMap<Edge, Edge>();
+    enrichedEdgeCacheRef.current = nextCache;
     return uniqueEdges.map((edge) => {
-      const isFront = edge.data?.isFront === true;
-      const effectiveZIndex = isFront ? 1000 : -1;
-      return {
-        ...edge,
-        zIndex: effectiveZIndex
-      };
+      let out = cache.get(edge);
+      if (!out) {
+        const isFront = edge.data?.isFront === true;
+        out = { ...edge, zIndex: isFront ? 1000 : -1 };
+      }
+      nextCache.set(edge, out);
+      return out;
     });
   }, [edges]);
 
@@ -1272,7 +1340,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         style: { stroke: '#0f172a', strokeWidth: 2 }
       };
 
-      const updatedNodes = nodes.map(n => ({ ...n, selected: false })).concat(newNode);
+      const updatedNodes = unselectAll(nodes).concat(newNode);
       const updatedEdges = edges.concat(newEdge);
 
       setNodes(updatedNodes);
@@ -1521,7 +1589,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     const handleDeleteEdgeEvent = (e: any) => {
       const { id } = e.detail;
-      setNodes((prevNodes) => prevNodes.map((n) => ({ ...n, selected: false })));
+      setNodes((prevNodes) => unselectAll(prevNodes));
       setEdges((prevEdges) => {
         const updated = prevEdges.filter((edge) => edge.id !== id);
         setSelectedEdge(null);
@@ -1963,7 +2031,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       setSelectedEdge(edge);
     } else {
       // Exclusivo: desmarca todas as formas e seleciona apenas esta linha
-      setNodes((nds) => nds.map((n) => ({ ...n, selected: false })));
+      setNodes((nds) => unselectAll(nds));
       setEdges((eds) => eds.map((eg) => ({ ...eg, selected: eg.id === edge.id })));
       setSelectedEdge(edge);
     }
@@ -2008,7 +2076,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     if (isNavigationMode) return;
     const isMultiKey = e.ctrlKey || e.metaKey || e.shiftKey;
     if (!isMultiKey) {
-      setEdges((eds) => eds.map((eg) => ({ ...eg, selected: false })));
+      setEdges((eds) => unselectAll(eds));
       setSelectedEdge(null);
     }
 
@@ -2043,7 +2111,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     if (!isMultiKey) {
       // Exclusivo: desmarca todas as linhas e seleciona apenas este nó
       setSelectedEdge(null);
-      setEdges((eds) => eds.map((edgeItem) => ({ ...edgeItem, selected: false })));
+      setEdges((eds) => unselectAll(eds));
       setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === clickedNode.id })));
     }
     // Quando isMultiKey (Ctrl/Meta/Shift), o próprio React Flow já
@@ -2129,8 +2197,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setShowAlignMenu(false);
     setShowHistoryMenu(false);
     setShowTimeSettingsMenu(false);
-    setNodes((nds) => nds.map((n) => ({ ...n, selected: false })));
-    setEdges((eds) => eds.map((e) => ({ ...e, selected: false })));
+    setNodes((nds) => unselectAll(nds));
+    setEdges((eds) => unselectAll(eds));
   }, [pendingShape, isPlacingFreeEdge, screenToFlowPosition, handleAddFreeEdge]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -2163,6 +2231,25 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     },
     [screenToFlowPosition]
   );
+
+  // Callbacks do <ReactFlow> com identidade fixa (ver useStableCallback).
+  const rf = {
+    onNodesChange: useStableCallback(onNodesChange),
+    onEdgesChange: useStableCallback(onEdgesChange),
+    onNodesDelete: useStableCallback(onNodesDelete),
+    onEdgesDelete: useStableCallback(onEdgesDelete),
+    onConnect: useStableCallback(onConnect),
+    onEdgeClick: useStableCallback(onEdgeClick),
+    onNodeClick: useStableCallback(onNodeClick),
+    onNodeDragStop: useStableCallback(onNodeDragStop),
+    onReconnectStart: useStableCallback(onReconnectStart),
+    onReconnect: useStableCallback(onReconnect),
+    onReconnectEnd: useStableCallback(onReconnectEnd),
+    onPaneClick: useStableCallback(onPaneClick),
+    onDrop: useStableCallback(onDrop),
+    onDragOver: useStableCallback(onDragOver),
+    edgesReconnectable: useStableCallback((edge: Edge) => edge.id === selectedEdge?.id || !!edge.selected),
+  };
 
   const handleAddNode = (type: string, initialData?: Record<string, any>, at?: { x: number; y: number }) => {
     let position = {
@@ -2250,7 +2337,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       selected: true
     };
 
-    const updatedNodes = nodes.map(n => ({ ...n, selected: false })).concat(newNode);
+    const updatedNodes = unselectAll(nodes).concat(newNode);
     setNodes(updatedNodes);
     pushHistory(updatedNodes, edges);
     saveToCloud(activeVersion, updatedNodes, edges);
@@ -2563,7 +2650,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       const nextNodes =
         mode === 'substituir'
           ? prepared.nodes.map((n: any) => ({ ...n, selected: false }))
-          : [...nodes.map((n) => ({ ...n, selected: false })), ...prepared.nodes];
+          : [...unselectAll(nodes), ...prepared.nodes];
       const nextEdges = mode === 'substituir' ? prepared.edges : [...edges, ...prepared.edges];
 
       setNodes(nextNodes as Node[]);
@@ -2708,7 +2795,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       },
       selected: true
     };
-    const nextNodes = nodes.map(n => ({ ...n, selected: false })).concat(duplicatedNode);
+    const nextNodes = unselectAll(nodes).concat(duplicatedNode);
     setNodes(nextNodes);
     pushHistory(nextNodes, edges);
     saveToCloud(activeVersion, nextNodes, edges);
@@ -2726,7 +2813,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       selected: true
     }));
 
-    const nextNodes = nodes.map(n => ({ ...n, selected: false })).concat(newDuplicatedNodes);
+    const nextNodes = unselectAll(nodes).concat(newDuplicatedNodes);
     setNodes(nextNodes);
     pushHistory(nextNodes, edges, `Duplicou ${nodesToDup.length} formas`);
     saveToCloud(activeVersion, nextNodes, edges);
@@ -2818,8 +2905,8 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
   const handleClearAllSelection = useCallback(() => {
     setSelectedEdge(null);
-    setNodes(nds => nds.map(n => ({ ...n, selected: false })));
-    setEdges(eds => eds.map(e => ({ ...e, selected: false })));
+    setNodes(nds => unselectAll(nds));
+    setEdges(eds => unselectAll(eds));
   }, []);
 
   // Auto Layout using Dagre
@@ -4977,14 +5064,14 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             edges={enrichedEdges}
             nodeTypes={customNodeTypes}
             edgeTypes={customEdgeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodesDelete={onNodesDelete}
-            onEdgesDelete={onEdgesDelete}
-            onConnect={onConnect}
+            onNodesChange={rf.onNodesChange}
+            onEdgesChange={rf.onEdgesChange}
+            onNodesDelete={rf.onNodesDelete}
+            onEdgesDelete={rf.onEdgesDelete}
+            onConnect={rf.onConnect}
             
-            isValidConnection={() => true}
-            onEdgeClick={onEdgeClick}
+            isValidConnection={alwaysValidConnection}
+            onEdgeClick={rf.onEdgeClick}
             // A linha selecionada precisa vir pra frente das outras — sem isso,
             // quando duas ou mais linhas se encontram no mesmo ponto (setas
             // convergindo numa mesma forma), a alça de arrastar a ponta da
@@ -4992,16 +5079,16 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             // agarrar mesmo com a linha certa já selecionada.
             elevateEdgesOnSelect={true}
             elevateNodesOnSelect={true}
-            onNodeClick={onNodeClick}
-            onNodeDragStop={onNodeDragStop}
-            onReconnectStart={onReconnectStart}
-            onReconnect={onReconnect}
-            onReconnectEnd={onReconnectEnd}
-            edgesReconnectable={!isNavigationMode && ((edge: Edge) => edge.id === selectedEdge?.id || !!edge.selected)}
+            onNodeClick={rf.onNodeClick}
+            onNodeDragStop={rf.onNodeDragStop}
+            onReconnectStart={rf.onReconnectStart}
+            onReconnect={rf.onReconnect}
+            onReconnectEnd={rf.onReconnectEnd}
+            edgesReconnectable={!isNavigationMode && (rf.edgesReconnectable as any)}
             reconnectRadius={40}
-            onPaneClick={onPaneClick}
-            onDrop={isNavigationMode ? undefined : onDrop}
-            onDragOver={isNavigationMode ? undefined : onDragOver}
+            onPaneClick={rf.onPaneClick}
+            onDrop={isNavigationMode ? undefined : rf.onDrop}
+            onDragOver={isNavigationMode ? undefined : rf.onDragOver}
             panOnDrag={isNavigationMode || toolMode === 'pan'}
             selectionOnDrag={!isNavigationMode && toolMode === 'select'}
             // Seleção por arraste rola a tela sozinha quando o mouse chega
@@ -5010,14 +5097,14 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             // ancorada no ponto onde o arraste começou, então o que entra
             // nela é exatamente o que fica entre esse ponto e o mouse.
             autoPanOnSelection={true}
-            multiSelectionKeyCode={['Control', 'Meta', 'Shift']}
+            multiSelectionKeyCode={MULTI_SELECTION_KEYS}
             connectionMode={ConnectionMode.Loose}
             snapToGrid={true}
-            snapGrid={[10, 10]}
+            snapGrid={SNAP_GRID}
             minZoom={0.02}
             maxZoom={4}
             fitView
-            fitViewOptions={{ padding: 0.25, duration: 400, minZoom: 0.02 }}
+            fitViewOptions={FIT_VIEW_OPTIONS}
             deleteKeyCode={null}
             // Modo Navegação: trava tudo que edita o fluxo, sobrando só
             // pan/zoom — elementsSelectable=false também impede o React
@@ -5029,12 +5116,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             elementsSelectable={!isNavigationMode}
             nodesFocusable={!isNavigationMode}
             edgesFocusable={!isNavigationMode}
-            defaultEdgeOptions={{
-              type: 'smoothstep',
-              reconnectable: true,
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#0f172a' },
-              style: { stroke: '#0f172a', strokeWidth: 2 }
-            }}
+            defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
             className={`bg-zinc-50 ${isConnecting ? "is-connecting" : ""} ${isNavigationMode ? "cursor-default" : ""} ${hasSelectedEdge ? "edge-selected-mode" : ""} ${pendingShape ? "placing-shape" : ""}`}
             style={isPlacingFreeEdge ? { cursor: FREE_EDGE_CURSOR } : pendingShape ? { cursor: 'crosshair' } : undefined}
           >
