@@ -88,7 +88,8 @@ import {
   FolderOpen,
   Eraser,
   Columns3,
-  Rows3
+  Rows3,
+  SkipBack
 } from 'lucide-react';
 
 import { customNodeTypes, getNodeDimensions, pickBoxStyle } from './CustomNodes';
@@ -117,6 +118,7 @@ import { readImportFile, applyImport, ImportFile, ImportMode, ImportSource } fro
 import { FIXED_VERSIONS, isFixedVersion, guessTargetVersion, normalizeVersions } from '../lib/fixedVersions';
 import { COMPLETE_MARKER, mergeGeneratedPart } from '../lib/compactFormat';
 import { assignFlowHandles } from '../utils/flowHandles';
+import { presentationOrder, absolutePosition } from '../utils/presentationOrder';
 import {
   buildClip,
   collectSelection,
@@ -647,6 +649,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // Arquivo .json lido, esperando a escolha das versões no modal.
   const [importFile, setImportFile] = useState<ImportFile | null>(null);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
+  // Etapa mostrada na apresentação (id da forma) e o aviso "começar de onde?".
+  const [presentationNodeId, setPresentationNodeId] = useState<string | null>(null);
+  const [presentationChoice, setPresentationChoice] = useState<{ id: string; label: string } | null>(null);
   const [showAIModal, setShowAIModal] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showAlignMenu, setShowAlignMenu] = useState(false);
@@ -1082,6 +1087,70 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   const hasSelectedEdge = edges.some(e => e.selected) || !!selectedEdge;
   const currentlySelectedNode = selectedNodesList.length > 0 ? selectedNodesList[0] : null;
   const hasActiveSelection = selectedNodesList.length > 0 || selectedEdgesList.length > 0;
+
+  // ---------------------------------------------------------------------
+  // MODO APRESENTAÇÃO: etapas na ordem do fluxo (ver utils/presentationOrder).
+  // Começa do início ou da forma selecionada, e durante a apresentação um
+  // clique em qualquer forma continua a partir dela.
+  // ---------------------------------------------------------------------
+  const presentationSteps = useMemo(() => {
+    if (!isPresentationMode) return [];
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    return presentationOrder(nodes as any, edges as any).map((id) => {
+      const n = byId.get(id)!;
+      const label = String(n.data?.label ?? '').replace(/\s+/g, ' ').trim();
+      return { id, label: label || 'Forma sem texto' };
+    });
+  }, [isPresentationMode, nodes, edges]);
+  const presentationIndex = Math.max(0, presentationSteps.findIndex((st) => st.id === presentationNodeId));
+
+  const focusPresentationNode = useCallback((nodeId: string, select = true) => {
+    const all = getNodes();
+    const byId = new Map(all.map((n) => [n.id, n]));
+    const target = byId.get(nodeId);
+    if (!target) return;
+    setPresentationNodeId(nodeId);
+    if (select) {
+      setNodes((nds) => nds.map((n) => (n.selected === (n.id === nodeId) ? n : { ...n, selected: n.id === nodeId })));
+      setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
+      setSelectedEdge(null);
+    }
+    const p = absolutePosition(target as any, byId as any);
+    const size = shapeSize(target);
+    setCenter(p.x + size.width / 2, p.y + size.height / 2, { zoom: Math.max(1, getViewport().zoom), duration: 600 });
+  }, [getNodes, getViewport, setCenter, setNodes, setEdges]);
+
+  // Ao sair da apresentação, tira a seleção da etapa que estava sendo
+  // mostrada (senão o painel de edição abriria de repente por cima do quadro).
+  const wasPresentingRef = useRef(false);
+  useEffect(() => {
+    if (wasPresentingRef.current && !isPresentationMode) {
+      setNodes((nds) => (nds.some((n) => n.selected) ? nds.map((n) => (n.selected ? { ...n, selected: false } : n)) : nds));
+    }
+    wasPresentingRef.current = isPresentationMode;
+  }, [isPresentationMode, setNodes]);
+
+  const startPresentation = useCallback((fromNodeId?: string) => {
+    setPresentationChoice(null);
+    setIsPresentationMode(true);
+    const first = fromNodeId || presentationOrder(getNodes() as any, edges as any)[0];
+    setPresentationNodeId(first || null);
+    if (first) setTimeout(() => focusPresentationNode(first), 0);
+  }, [getNodes, edges, focusPresentationNode]);
+
+  const togglePresentation = useCallback(() => {
+    if (isPresentationMode) {
+      setIsPresentationMode(false);
+      return;
+    }
+    const sel = selectedNodesList.find((n) => n.type !== 'swimlane' && n.type !== 'frame');
+    if (sel) {
+      const label = String(sel.data?.label ?? '').replace(/\s+/g, ' ').trim() || 'Forma sem texto';
+      setPresentationChoice({ id: sel.id, label });
+    } else {
+      startPresentation();
+    }
+  }, [isPresentationMode, selectedNodesList, startPresentation]);
 
   // Dynamic Z-Index / Overlap Layer Management:
   // - Por padrão as linhas passam por trás (zIndex: -1), ficando estritamente atrás do corpo e texto do nó.
@@ -1631,6 +1700,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         fitView({ padding: 0.2 });
       } else if (e.key === 'Escape') {
         setIsPresentationMode(false);
+        setPresentationChoice(null);
         setShowTemplatesModal(false);
         setShowAIModal(false);
         setShowExportMenu(false);
@@ -1931,6 +2001,10 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, []);
 
   const onNodeClick = useCallback((e: React.MouseEvent, clickedNode: Node) => {
+    // Na apresentação, clicar numa forma continua a apresentação a partir dela.
+    if (isPresentationMode && presentationSteps.some((st) => st.id === clickedNode.id)) {
+      focusPresentationNode(clickedNode.id, false);
+    }
     if (isNavigationMode) return;
     const isMultiKey = e.ctrlKey || e.metaKey || e.shiftKey;
     if (!isMultiKey) {
@@ -1976,7 +2050,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     // adiciona/remove este nó do multi-select ao processar o clique
     // internamente — alternar "selected" de novo aqui cancelava esse
     // toggle interno (ver comentário equivalente em onEdgeClick).
-  }, [selectedEdge, reconnectingEndpoint, nodes, activeVersion, pushHistory, saveToCloud, isNavigationMode]);
+  }, [selectedEdge, reconnectingEndpoint, nodes, activeVersion, pushHistory, saveToCloud, isNavigationMode, isPresentationMode, presentationSteps, focusPresentationNode]);
 
   // Adiciona uma seta/linha independente (dois pontos de junção ligados por
   // uma aresta, sem forma nenhuma) centrada em "centerPos" — em coordenadas
@@ -4414,7 +4488,8 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
 
           {/* Presentation Mode Trigger */}
           <button
-            onClick={() => setIsPresentationMode(!isPresentationMode)}
+            onClick={togglePresentation}
+            data-presentation-toggle
             className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 ${
               isPresentationMode
                 ? 'bg-emerald-600 text-white shadow-md'
@@ -4832,7 +4907,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
             embaixo do botão "Mostrar barra" (e do alerta de backup) no canto.
             No celular a largura deixa livre a barra de ferramentas da esquerda
             (72px), em vez de cobri-la. */}
-        {hasActiveSelection && isRightSidebarOpen && (
+        {hasActiveSelection && isRightSidebarOpen && !isPresentationMode && (
           <aside data-right-sidebar className={`absolute right-2 sm:right-3 ${headerHidden ? 'top-12' : 'top-3'} bottom-16 w-[min(20rem,calc(100vw-80px))] sm:w-84 z-40 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-zinc-200/90 flex flex-col overflow-hidden animate-in fade-in slide-in-from-right-4 duration-200`}>
             {selectedNodesList.length > 0 && selectedEdgesList.length === 0 ? (
               <MiroNodeToolbar
@@ -4884,7 +4959,7 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
         )}
 
         {/* COMPACT FLOATING TAB BUTTON ON RIGHT EDGE WHEN SIDEBAR IS HIDDEN */}
-        {hasActiveSelection && !isRightSidebarOpen && (
+        {hasActiveSelection && !isRightSidebarOpen && !isPresentationMode && (
           <button
             onClick={() => setIsRightSidebarOpen(true)}
             className="absolute right-0 top-1/2 -translate-y-1/2 bg-white border border-zinc-200 shadow-xl rounded-l-2xl px-2.5 py-3 text-blue-600 hover:bg-blue-50 font-bold z-40 flex flex-col items-center gap-1.5 text-xs transition-all cursor-pointer hover:pl-3"
@@ -5150,14 +5225,59 @@ Cada nó do fluxograma possui um painel configurável para Value Stream Mapping 
         isOpen={isPresentationMode}
         onClose={() => setIsPresentationMode(false)}
         title={title}
-        nodes={nodes}
-        onFocusNode={(nodeId) => {
-          const targetNode = nodes.find(n => n.id === nodeId);
-          if (targetNode) {
-            setCenter(targetNode.position.x + 100, targetNode.position.y + 50, { zoom: 1.3, duration: 600 });
-          }
+        steps={presentationSteps}
+        currentIndex={presentationIndex}
+        onGoTo={(i) => {
+          const st = presentationSteps[Math.min(Math.max(0, i), presentationSteps.length - 1)];
+          if (st) focusPresentationNode(st.id);
         }}
       />
+
+      {/* Começar a apresentação do início ou da forma selecionada */}
+      {presentationChoice && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-sm p-3"
+          onClick={() => setPresentationChoice(null)}
+        >
+          <div
+            data-presentation-start
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-4 sm:p-5 border border-zinc-200 animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                <Play size={15} className="text-emerald-600" /> Iniciar apresentação
+              </h3>
+              <button
+                onClick={() => setPresentationChoice(null)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 cursor-pointer"
+                aria-label="Fechar"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-xs text-zinc-500 mb-3">De onde você quer começar?</p>
+            <div className="space-y-2">
+              <button
+                data-presentation-from-selected
+                onClick={() => startPresentation(presentationChoice.id)}
+                className="w-full text-left px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer transition-colors"
+              >
+                <span className="flex items-center gap-2 text-xs font-bold"><Play size={14} /> Da forma selecionada</span>
+                <span className="block text-[11px] text-emerald-50 truncate mt-0.5">{presentationChoice.label}</span>
+              </button>
+              <button
+                data-presentation-from-start
+                onClick={() => startPresentation()}
+                className="w-full text-left px-3 py-2.5 rounded-xl border border-zinc-200 hover:bg-zinc-100 text-zinc-700 cursor-pointer transition-colors"
+              >
+                <span className="flex items-center gap-2 text-xs font-bold"><SkipBack size={14} /> Do início do fluxo</span>
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-500 mt-3">Durante a apresentação, clique em qualquer forma (ou escolha na lista da barra) para continuar a partir dela.</p>
+          </div>
+        </div>
+      )}
 
       {/* MIRO ASSIST AI GENERATOR MODAL */}
       {showAIModal && !isGenerating && (
