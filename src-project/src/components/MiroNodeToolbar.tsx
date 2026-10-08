@@ -650,9 +650,9 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
           {/* Border Thickness, Radius & Style */}
           <div className="bg-zinc-50 p-2.5 rounded-xl border border-zinc-200 space-y-2.5 mt-2">
             {/* Border Thickness */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
               <span className="text-xs font-medium text-zinc-600">Espessura da Borda:</span>
-              <div className="flex gap-1">
+              <div className="flex flex-wrap gap-1">
                 {['1px', '2px', '3px', '4px', '6px'].map((w) => (
                   <button
                     key={w}
