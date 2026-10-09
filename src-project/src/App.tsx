@@ -17,6 +17,16 @@ import { downloadSystemManual } from './utils/systemManual';
 type SortOption = 'recent' | 'oldest' | 'name-asc' | 'name-desc';
 type FilterType = 'all' | 'folders' | 'diagrams';
 
+
+/** "09/10/2026 às 14:35" — data e hora da última alteração do diagrama. */
+const formatUpdatedAt = (ts: number | string | undefined): string => {
+  const d = new Date(ts ?? '');
+  if (Number.isNaN(d.getTime())) return '';
+  const data = d.toLocaleDateString('pt-BR');
+  const hora = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return `${data} às ${hora}`;
+};
+
 export default function App() {
 
   const [hasStarted, setHasStarted] = useState(false);
@@ -639,12 +649,12 @@ export default function App() {
                       <span className="font-bold text-sm text-zinc-900 truncate group-hover:text-blue-600 transition-colors">
                         {diag.title}
                       </span>
-                      <span className="text-[11px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md font-semibold hidden sm:inline-block">
+                      <span className="text-[11px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md font-semibold hidden sm:inline-block whitespace-nowrap shrink-0">
                         {nodeCount} etapas
                       </span>
                     </div>
                     <div className="flex items-center gap-1 sm:gap-3 text-xs text-zinc-400 shrink-0">
-                      <span className="hidden sm:inline sm:mr-2">Atualizado {new Date(diag.updatedAt).toLocaleDateString()}</span>
+                      <span className="hidden sm:inline sm:mr-2 whitespace-nowrap" data-updated-at>Atualizado {formatUpdatedAt(diag.updatedAt)}</span>
                       <button
                         onClick={(e) => { e.stopPropagation(); openMove([diag.id], [], false); }}
                         className={`p-1.5 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors sm:opacity-0 group-hover:opacity-100 ${selectionActive ? 'invisible' : ''}`}
