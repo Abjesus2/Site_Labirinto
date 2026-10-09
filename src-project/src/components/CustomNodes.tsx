@@ -19,10 +19,70 @@ import { NodeTiming } from '../types';
 import { formatDuration } from '../utils/timingUtils';
 import { useNavigationMode } from '../lib/navigationMode';
 
-// Alças de redimensionar só com UMA forma selecionada (ver lib/selectionMode).
-const NodeResizer: React.FC<React.ComponentProps<typeof FlowNodeResizer>> = (props) => {
+/**
+ * Redimensionar: cantos mudam largura e altura juntas; as alças no MEIO de
+ * cada lado mudam só uma medida (esquerda/direita = largura, cima/baixo =
+ * altura). Em formas comuns as alças dos lados ficam um pouco FORA da borda,
+ * para não cobrir os "+" de ligação que ficam no meio de cada lado; em raias
+ * e quadros (sideHandles="border") ficam sobre a borda.
+ * Tudo só com UMA forma selecionada (ver lib/selectionMode).
+ */
+const SIDE_HANDLE_OFFSET = 20;
+const SIDE_HANDLES = [
+  { position: 'top', width: 26, height: 7, title: 'Arraste para mudar só a altura' },
+  { position: 'bottom', width: 26, height: 7, title: 'Arraste para mudar só a altura' },
+  { position: 'left', width: 7, height: 26, title: 'Arraste para mudar só a largura' },
+  { position: 'right', width: 7, height: 26, title: 'Arraste para mudar só a largura' },
+] as const;
+
+const sideHandleStyle = (position: (typeof SIDE_HANDLES)[number]['position'], outside: boolean): React.CSSProperties => {
+  if (!outside) return {};
+  switch (position) {
+    case 'top': return { top: -SIDE_HANDLE_OFFSET };
+    case 'bottom': return { top: `calc(100% + ${SIDE_HANDLE_OFFSET}px)` };
+    case 'left': return { left: -SIDE_HANDLE_OFFSET };
+    default: return { left: `calc(100% + ${SIDE_HANDLE_OFFSET}px)` };
+  }
+};
+
+type ResizerProps = React.ComponentProps<typeof FlowNodeResizer> & { sideHandles?: 'outside' | 'border' };
+
+const NodeResizer: React.FC<ResizerProps> = ({ sideHandles = 'outside', ...props }) => {
   const multi = useIsMultiSelect();
-  return <FlowNodeResizer {...props} isVisible={!!props.isVisible && !multi} />;
+  const visible = !!props.isVisible && !multi;
+  return (
+    <>
+      <FlowNodeResizer {...props} isVisible={visible} />
+      {visible &&
+        SIDE_HANDLES.map((h) => (
+          <NodeResizeControl
+            key={h.position}
+            position={h.position}
+            variant={ResizeControlVariant.Handle}
+            minWidth={props.minWidth}
+            minHeight={props.minHeight}
+            maxWidth={props.maxWidth}
+            maxHeight={props.maxHeight}
+            className={`side-resize-handle side-resize-${sideHandles}`}
+            style={{
+              width: h.width,
+              height: h.height,
+              background: '#ffffff',
+              border: '2px solid #2563eb',
+              borderRadius: 4,
+              zIndex: 101,
+              pointerEvents: 'auto',
+              ...sideHandleStyle(h.position, sideHandles === 'outside'),
+            }}
+            onResizeStart={props.onResizeStart}
+            onResize={props.onResize}
+            onResizeEnd={props.onResizeEnd}
+          >
+            <span className="sr-only">{h.title}</span>
+          </NodeResizeControl>
+        ))}
+    </>
+  );
 };
 
 // Quick Add connector button component - Disabled to prevent flashing unwanted dots
@@ -896,7 +956,7 @@ export const CircleNode = ({ id, data, type, selected }: any) => {
 export const TextNode = ({ id, data, type, selected }: any) => {
   return (
     <div
-      className={`p-2 rounded font-sans transition-colors w-full h-full ${
+      className={`relative p-2 rounded font-sans transition-colors w-full h-full ${
         selected ? 'ring-2 ring-blue-500 bg-blue-50/30' : 'hover:bg-zinc-100/50'
       }`}
       style={{
@@ -908,6 +968,17 @@ export const TextNode = ({ id, data, type, selected }: any) => {
         ...pickBoxStyle(data.styleOverride)
       }}
     >
+      {/* Caixa de texto também pode mudar de tamanho (largura define onde o
+          texto quebra a linha); sem "+" de ligação, as alças ficam na borda. */}
+      <NodeResizer
+        isVisible={selected}
+        sideHandles="border"
+        minWidth={60}
+        minHeight={28}
+        lineClassName="border-blue-500"
+        handleClassName="h-2.5 w-2.5 bg-white border-2 border-blue-600 rounded-sm shadow"
+        onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
+      />
       <div className="min-w-[60px] w-full h-full">
         <EditableNodeLabel nodeId={id} label={data.label} placeholder="Clique duas vezes para editar texto" />
       </div>
@@ -929,42 +1000,6 @@ const ContainerBorderHandles = () => (
   </>
 );
 
-/**
- * Raias e quadros: alças no MEIO de cada lado. As da esquerda/direita mudam
- * só a largura; as de cima/baixo, só a altura (os cantos continuam mudando
- * as duas). A borda de 1px do redimensionador padrão ficava por baixo da
- * área de arrastar a raia e não dava para pegar.
- */
-const SIDE_HANDLES = [
-  { position: 'top', width: 28, height: 8, title: 'Arraste para mudar só a altura' },
-  { position: 'bottom', width: 28, height: 8, title: 'Arraste para mudar só a altura' },
-  { position: 'left', width: 8, height: 28, title: 'Arraste para mudar só a largura' },
-  { position: 'right', width: 8, height: 28, title: 'Arraste para mudar só a largura' },
-] as const;
-
-const ContainerSideResizers = ({ id, selected, minWidth, minHeight }: { id: string; selected: boolean; minWidth: number; minHeight: number }) => {
-  const multi = useIsMultiSelect();
-  if (!selected || multi) return null;
-  return (
-    <>
-      {SIDE_HANDLES.map((h) => (
-        <NodeResizeControl
-          key={h.position}
-          position={h.position}
-          variant={ResizeControlVariant.Handle}
-          minWidth={minWidth}
-          minHeight={minHeight}
-          className="container-side-handle"
-          style={{ width: h.width, height: h.height, background: '#ffffff', border: '2px solid #2563eb', borderRadius: 4, zIndex: 101, pointerEvents: 'auto' }}
-          onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
-        >
-          <span className="sr-only">{h.title}</span>
-        </NodeResizeControl>
-      ))}
-    </>
-  );
-};
-
 // Swimlane Node
 export const SwimlaneNode = ({ id, data, type, selected }: any) => {
   const isVertical = data.orientation === 'vertical' || data.styleOverride?.orientation === 'vertical';
@@ -984,13 +1019,13 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
     >
       <NodeResizer
         isVisible={selected}
+        sideHandles="border"
         minWidth={160}
         minHeight={60}
         lineClassName="border-blue-500 border-dashed"
         handleClassName="w-3.5 h-3.5 bg-white border-2 border-blue-600 rounded-sm shadow-md z-50 hover:scale-125 transition-transform cursor-pointer"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
-      <ContainerSideResizers id={id} selected={selected} minWidth={160} minHeight={60} />
       <ContainerBorderHandles />
       <div
         className="lane-drag-handle bg-zinc-100/90 border-b border-zinc-200/90 px-3.5 py-2 rounded-t-lg font-semibold text-xs text-zinc-700 flex items-center justify-between select-none shrink-0 cursor-move"
@@ -1029,13 +1064,13 @@ export const FrameNode = ({ id, data, type, selected }: any) => {
     >
       <NodeResizer
         isVisible={selected}
+        sideHandles="border"
         minWidth={200}
         minHeight={120}
         lineClassName="border-blue-500 border-dashed"
         handleClassName="w-3.5 h-3.5 bg-white border-2 border-blue-600 rounded-sm shadow-md z-50 hover:scale-125 transition-transform cursor-pointer"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
-      <ContainerSideResizers id={id} selected={selected} minWidth={200} minHeight={120} />
       <ContainerBorderHandles />
       <div
         className="lane-drag-handle absolute top-2 left-2 right-2 px-3 py-1 bg-zinc-800 text-white rounded-md text-xs font-semibold shadow-md flex items-center gap-1.5 select-none z-10 max-w-[calc(100%-1rem)] cursor-move"

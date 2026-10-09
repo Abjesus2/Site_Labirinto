@@ -614,6 +614,24 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // posição final própria (a da grade, sem o encaixe) — reaplicamos o mesmo
   // deslocamento para a forma não "pular" 1-2px para fora do alinhamento.
   const lastAlignSnapRef = useRef<{ dx: number; dy: number; ids: Set<string> } | null>(null);
+  // Shift durante o arraste: move só na horizontal OU só na vertical (o eixo
+  // em que o arraste andou mais). Posição de cada forma no início do arraste.
+  const shiftHeldRef = useRef(false);
+  const dragStartPosRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const lastAxisLockRef = useRef<'x' | 'y' | null>(null);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.key === 'Shift') shiftHeldRef.current = true; };
+    const up = (e: KeyboardEvent) => { if (e.key === 'Shift') shiftHeldRef.current = false; };
+    const reset = () => { shiftHeldRef.current = false; };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', reset);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', reset);
+    };
+  }, []);
   const themeState = useTheme();
   const backupReminder = useBackupReminder();
   // Barra superior oculta para ganhar espaço de edição (lembrado neste navegador).
@@ -1075,23 +1093,28 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     }
   }, [nodes, edges, selectedEdge, activeVersion, pushHistory, saveToCloud]);
 
-  // Bulk Dimension update (for single node or multiple selected nodes)
-  const handleBulkDimensions = useCallback((width: number, height: number) => {
+  // Bulk Dimension update (for single node or multiple selected nodes).
+  // Medida não informada fica como está em cada forma — assim dá para mudar
+  // só a largura ou só a altura (de uma ou de várias formas).
+  const handleBulkDimensions = useCallback((width?: number, height?: number) => {
     const selectedNodes = nodes.filter(n => n.selected);
-    const targetIds = selectedNodes.map(n => n.id);
-    
-    if (targetIds.length === 0) return;
+    const targetIds = new Set(selectedNodes.map(n => n.id));
+
+    if (targetIds.size === 0 || (!width && !height)) return;
 
     const nextNodes = nodes.map(n => {
-      if (targetIds.includes(n.id)) {
+      if (targetIds.has(n.id)) {
+        const size = shapeSize(n);
+        const w = Math.round(width || (n.data?.width as number) || size.width);
+        const h = Math.round(height || (n.data?.height as number) || size.height);
         const { width: _w, height: _h, ...prevStyle } = n.data?.styleOverride || {};
         return {
           ...n,
-          style: { ...(n.style || {}), width, height },
+          style: { ...(n.style || {}), width: w, height: h },
           data: {
             ...n.data,
-            width,
-            height,
+            width: w,
+            height: h,
             styleOverride: prevStyle
           }
         };
@@ -1099,8 +1122,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       return n;
     });
 
+    const what = width && !height ? 'largura' : height && !width ? 'altura' : 'tamanho';
     setNodes(nextNodes);
-    pushHistory(nextNodes, edges, targetIds.length > 1 ? `Redimensionou ${targetIds.length} elementos` : 'Redimensionou elemento');
+    pushHistory(nextNodes, edges, targetIds.size > 1 ? `Ajustou ${what} de ${targetIds.size} elementos` : `Ajustou ${what} do elemento`);
     saveToCloud(activeVersion, nextNodes, edges);
   }, [nodes, edges, pushHistory, saveToCloud, activeVersion]);
 
@@ -1916,6 +1940,35 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     if (dragChanges.length > 0) {
       const current = nodesRef.current;
       const byId = new Map(current.map((n) => [n.id, n]));
+
+      // Trava de eixo com Shift (ver shiftHeldRef).
+      const starts = dragStartPosRef.current;
+      dragChanges.forEach((c) => {
+        if (!starts.has(c.id)) {
+          const n = byId.get(c.id);
+          if (n) starts.set(c.id, { ...n.position });
+        }
+      });
+      let lockedAxis: 'x' | 'y' | null = null;
+      if (shiftHeldRef.current) {
+        const lead = dragChanges.find((c) => starts.has(c.id));
+        if (lead) {
+          const st = starts.get(lead.id)!;
+          // 'y' travado = move só na horizontal; 'x' travado = só na vertical
+          lockedAxis = Math.abs(lead.position.x - st.x) >= Math.abs(lead.position.y - st.y) ? 'y' : 'x';
+          const lockedIds = new Set(dragChanges.map((c) => c.id));
+          changes = changes.map((c) => {
+            if (c.type !== 'position' || !(c as any).dragging || !(c as any).position || !lockedIds.has(c.id)) return c;
+            const st0 = starts.get(c.id);
+            if (!st0) return c;
+            const pos = (c as any).position;
+            return { ...c, position: lockedAxis === 'y' ? { x: pos.x, y: st0.y } : { x: st0.x, y: pos.y } };
+          }) as NodeChange[];
+          dragChanges.splice(0, dragChanges.length, ...(changes.filter(
+            (c) => c.type === 'position' && (c as any).dragging && (c as any).position,
+          ) as any[]));
+        }
+      }
       const isContainer = (n: Node) => n.type === 'swimlane' || n.type === 'frame';
       const rectOf = (n: Node, pos?: { x: number; y: number }): GuideRect => {
         const dim = getNodeDimensions(n.type);
@@ -1940,6 +1993,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       // de 10px empurra a forma em passos e, com zoom alto, 8px de tela
       // viravam só 3 unidades — o encaixe nunca acontecia).
       const snap = computeAlignmentSnap(draggedRects, others, Math.max(10 / zoom, 6));
+      lastAxisLockRef.current = lockedAxis;
+      if (lockedAxis === 'y') { snap.dy = 0; snap.horizontal = null; }
+      if (lockedAxis === 'x') { snap.dx = 0; snap.vertical = null; }
       if (snap.dx || snap.dy) {
         changes = changes.map((c) =>
           c.type === 'position' && (c as any).dragging && (c as any).position && draggedIds.has(c.id)
@@ -1950,6 +2006,20 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
       lastAlignSnapRef.current = { dx: snap.dx, dy: snap.dy, ids: draggedIds };
       setAlignGuides({ vertical: snap.vertical, horizontal: snap.horizontal });
     } else if (changes.some((c) => c.type === 'position')) {
+      // Fim do arraste: o React Flow manda a posição "solta" do ponteiro;
+      // reaplica a trava de eixo (Shift) antes do encaixe nas guias.
+      const lockAxis = lastAxisLockRef.current;
+      const lockStarts = dragStartPosRef.current;
+      if (lockAxis) {
+        changes = changes.map((c) => {
+          const st0 = c.type === 'position' && !(c as any).dragging && (c as any).position ? lockStarts.get(c.id) : undefined;
+          if (!st0) return c;
+          const pos = (c as any).position;
+          return { ...c, position: lockAxis === 'y' ? { x: pos.x, y: st0.y } : { x: st0.x, y: pos.y } };
+        }) as NodeChange[];
+      }
+      lastAxisLockRef.current = null;
+      dragStartPosRef.current = new Map();
       const last = lastAlignSnapRef.current;
       if (last && (last.dx || last.dy)) {
         changes = changes.map((c) =>

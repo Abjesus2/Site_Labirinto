@@ -58,7 +58,8 @@ export interface MiroNodeToolbarProps {
   onUpdateLabel: (id: string, label: string) => void;
   onUpdateStyle: (id: string, styleUpdates: Record<string, any>) => void;
   onUpdateBulkStyle?: (styleUpdates: Record<string, any>) => void;
-  onUpdateDimensions?: (width: number, height: number) => void;
+  /** Medida não informada (undefined) fica como está em cada forma. */
+  onUpdateDimensions?: (width?: number, height?: number) => void;
   onUpdateType: (id: string, newType: string) => void;
   onUpdateBulkType?: (newType: string) => void;
   onUpdateTag: (id: string, tag: string | undefined) => void;
@@ -142,6 +143,47 @@ const SIZE_PRESETS = [
   { label: 'Grande', width: 320, height: 90 },
 ];
 
+/** Campo numérico que só aplica ao confirmar (Enter ou sair do campo). */
+const DimensionInput: React.FC<{ label: string; value?: number; onCommit: (v: number) => void }> = ({ label, value, onCommit }) => {
+  const [text, setText] = useState(value !== undefined ? String(value) : '');
+  useEffect(() => {
+    setText(value !== undefined ? String(value) : '');
+  }, [value]);
+  const commit = () => {
+    const v = Math.round(Number(String(text).replace(',', '.')));
+    if (!Number.isFinite(v) || v <= 0) {
+      setText(value !== undefined ? String(value) : '');
+      return;
+    }
+    const clamped = Math.min(5000, Math.max(20, v));
+    if (clamped !== value) onCommit(clamped);
+    setText(String(clamped));
+  };
+  return (
+    <label className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-zinc-50 border border-zinc-200 focus-within:border-blue-400 min-w-0">
+      <span className="text-[11px] text-zinc-500 font-medium shrink-0">{label}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={20}
+        max={5000}
+        value={text}
+        placeholder={value === undefined ? 'várias' : undefined}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') { setText(value !== undefined ? String(value) : ''); (e.target as HTMLInputElement).blur(); }
+          e.stopPropagation();
+        }}
+        aria-label={`${label} em pixels`}
+        className="w-full min-w-0 bg-transparent text-xs font-mono text-zinc-800 outline-none text-right"
+      />
+      <span className="text-[10px] text-zinc-400 shrink-0">px</span>
+    </label>
+  );
+};
+
 export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
   node,
   selectedNodes = [],
@@ -184,12 +226,16 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
     (activeNode.width as number) ||
     (activeNode.style?.width as number) ||
     (activeNode.data?.styleOverride?.width as number) ||
+    // sem medida definida, a forma se ajusta ao texto: vale a medida real
+    Math.round((activeNode.measured?.width as number) || 0) ||
     initialDims.width;
   const currentHeight =
     (activeNode.data?.height as number) ||
     (activeNode.height as number) ||
     (activeNode.style?.height as number) ||
     (activeNode.data?.styleOverride?.height as number) ||
+    // sem medida definida, a forma se ajusta ao texto: vale a medida real
+    Math.round((activeNode.measured?.height as number) || 0) ||
     initialDims.height;
 
   // Multi-node or single-node style apply
@@ -269,12 +315,26 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
     }
   };
 
-  const handleApplyDimensions = (w: number, h: number) => {
+  const handleApplyDimensions = (w?: number, h?: number) => {
     if (onUpdateDimensions) {
       onUpdateDimensions(w, h);
     } else {
-      applyStyle({ width: w, height: h });
+      applyStyle({ ...(w ? { width: w } : {}), ...(h ? { height: h } : {}) });
     }
+  };
+
+  // Largura/altura digitadas: com várias formas, mostra o valor só se todas
+  // tiverem a mesma medida (senão o campo fica vazio, "várias").
+  const dimOf = (n: Node, axis: 'width' | 'height') => {
+    const d = getNodeDimensions(n.type);
+    return Math.round(
+      (n.data?.[axis] as number) || (n[axis] as number) || (n.style?.[axis] as number) || (n.measured?.[axis] as number) || d[axis],
+    );
+  };
+  const sharedDim = (axis: 'width' | 'height') => {
+    if (!isMultiple) return axis === 'width' ? Math.round(currentWidth) : Math.round(currentHeight);
+    const values = new Set(selectedNodes.map((n) => dimOf(n, axis)));
+    return values.size === 1 ? [...values][0] : undefined;
   };
 
   const handleScaleDimensions = (factor: number) => {
@@ -565,10 +625,25 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
             <label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">
               {isMultiple ? 'Dimensões em Lote' : 'Tamanho do Elemento'}
             </label>
-            {!isMultiple && (
-              <span className="text-[10px] text-zinc-400 font-mono">{currentWidth} x {currentHeight} px</span>
-            )}
           </div>
+
+          {/* Largura e altura separadas: muda só uma medida (com várias formas,
+              iguala aquela medida em todas). */}
+          <div className="grid grid-cols-2 gap-1.5" data-dimension-inputs>
+            <DimensionInput
+              label="Largura"
+              value={sharedDim('width')}
+              onCommit={(v) => handleApplyDimensions(v, undefined)}
+            />
+            <DimensionInput
+              label="Altura"
+              value={sharedDim('height')}
+              onCommit={(v) => handleApplyDimensions(undefined, v)}
+            />
+          </div>
+          <p className="text-[10px] text-zinc-400 leading-snug" data-axis-hint>
+            Dica: as alças no meio de cada lado mudam só uma medida, e segurar <b>Shift</b> ao arrastar move a forma só na horizontal ou só na vertical.
+          </p>
 
           {/* Quick Presets */}
           <div className="grid grid-cols-2 gap-1.5">
