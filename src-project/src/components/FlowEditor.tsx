@@ -264,12 +264,10 @@ const recomputeEdgeRoutingForNodes = (edges: Edge[], nodes: Node[], movedNodeIds
       (sourceHandle === 'right' && targetHandle === 'left') ||
       (sourceHandle === 'left' && targetHandle === 'right');
 
-    let chosenType: 'straight' | 'smoothstep' = 'smoothstep';
-    if (isVerticalPair && Math.abs(sCenterX - tCenterX) <= 8) {
-      chosenType = 'straight';
-    } else if (isHorizontalPair && Math.abs(sCenterY - tCenterY) <= 8) {
-      chosenType = 'straight';
-    }
+    // Tipo automático é sempre Suave (sai reto quando alinhado; ver
+    // normalizeAutoStraight). Reta escolhida pela pessoa é respeitada.
+    const chosenType = edge.type === 'straight' && edge.data?.userEdgeType ? 'straight' : 'smoothstep';
+    void isVerticalPair; void isHorizontalPair;
 
     const hasControlPoints = Array.isArray(edge.data?.controlPoints) && edge.data.controlPoints.length > 0;
 
@@ -426,12 +424,9 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction: 'TB' | 'LR
       (chosenSourceHandle === 'right' && chosenTargetHandle === 'left') ||
       (chosenSourceHandle === 'left'  && chosenTargetHandle === 'right');
 
-    let chosenEdgeType: 'straight' | 'smoothstep' = 'smoothstep';
-    if (isVerticalPair && Math.abs(sCenterX - tCenterX) <= 1) {
-      chosenEdgeType = 'straight';
-    } else if (isHorizontalPair && Math.abs(sCenterY - tCenterY) <= 1) {
-      chosenEdgeType = 'straight';
-    }
+    // Suave sempre (sai reto quando alinhado; ver normalizeAutoStraight).
+    const chosenEdgeType = edge.type === 'straight' && (edge.data as any)?.userEdgeType ? 'straight' : 'smoothstep';
+    void isVerticalPair; void isHorizontalPair;
 
     return {
       ...edge,
@@ -549,6 +544,28 @@ function useStableCallback<T extends (...args: any[]) => any>(fn: T): T {
   return useCallback(((...args: any[]) => ref.current(...args)) as T, []);
 }
 
+/**
+ * "Reta" só quando a PESSOA escolhe no painel da linha (data.userEdgeType).
+ * Antes o app gravava o tipo Reta sozinho sempre que as duas formas estavam
+ * alinhadas (geração por IA, Organizar, ao mover). Uma linha Reta é um traço
+ * direto entre as pontas: ao religar a seta em outra forma (a linha vira
+ * "ajustada à mão") ou ao desalinhar, ela ficava na DIAGONAL e mover as
+ * formas não corrigia. O traçado Suave já sai reto quando as pontas estão
+ * alinhadas e faz as dobras quando não estão.
+ */
+function normalizeAutoStraight<T extends { type?: string; data?: any }>(items: T[]): T[] {
+  if (!Array.isArray(items) || !items.some((e) => e && e.type === 'straight' && !e.data?.userEdgeType)) return items;
+  return items.map((e) => (e && e.type === 'straight' && !e.data?.userEdgeType ? { ...e, type: 'smoothstep' } : e));
+}
+
+/** Aplica alterações numa linha; escolher o tipo no painel marca a escolha como da pessoa. */
+function applyEdgeUpdates<E extends { data?: any; style?: any; type?: string }>(edge: E, updates: Partial<E>, mergeStyle = false): E {
+  const next: any = { ...edge, ...updates };
+  if (mergeStyle) next.style = updates.style ? { ...((edge.style as any) || {}), ...(updates.style as any) } : edge.style;
+  if ('type' in updates) next.data = { ...(next.data || {}), userEdgeType: true };
+  return next as E;
+}
+
 /** Junta estilos; valor null REMOVE a opção (volta ao padrão da forma). */
 function mergeStyleOverride(prev: Record<string, any>, updates: Record<string, any>): Record<string, any> {
   const next: Record<string, any> = { ...prev, ...updates };
@@ -652,7 +669,12 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     setFloatingSaveMenuOpen(false);
     try { localStorage.setItem(HEADER_HIDDEN_KEY, hidden ? '1' : '0'); } catch {}
   };
-  const [edges, setEdges] = useState<Edge[]>([]);
+  const [edges, setEdgesState] = useState<Edge[]>([]);
+  // Toda troca da lista inteira de linhas (abrir, desfazer, versão,
+  // importar...) passa por normalizeAutoStraight.
+  const setEdges = useCallback((value: React.SetStateAction<Edge[]>) => {
+    setEdgesState(typeof value === 'function' ? value : normalizeAutoStraight(value));
+  }, []);
   const [title, setTitle] = useState("Carregando...");
   const [loading, setLoading] = useState(true);
   
@@ -2966,9 +2988,9 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // Add Free Floating Line (Independent from shapes)
   // Edge Property Updaters
   const updateEdge = (id: string, updates: Partial<Edge>) => {
-    const nextEdges = edges.map(e => e.id === id ? { ...e, ...updates } : e);
+    const nextEdges = edges.map(e => e.id === id ? applyEdgeUpdates(e, updates) : e);
     setEdges(nextEdges);
-    setSelectedEdge(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
+    setSelectedEdge(prev => prev && prev.id === id ? applyEdgeUpdates(prev, updates) : prev);
     pushHistory(nodes, nextEdges, 'Atualizou propriedades da linha');
     saveToCloud(activeVersion, nodes, nextEdges);
   };
@@ -3012,13 +3034,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
 
     const nextEdges = edges.map(e => {
       if (selectedEdgeIds.has(e.id)) {
-        const prevStyle = (e.style as any) || {};
-        const newStyle = updates.style ? { ...prevStyle, ...updates.style } : prevStyle;
-        return {
-          ...e,
-          ...updates,
-          style: newStyle
-        };
+        return applyEdgeUpdates(e, updates, true);
       }
       return e;
     });

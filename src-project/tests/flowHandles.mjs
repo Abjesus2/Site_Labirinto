@@ -29,5 +29,13 @@ check('três saídas em três pontos diferentes', new Set(r3.map((e) => e.source
 const manual = { ...ed('m', 'a', 'b'), sourceHandle: 'left', targetHandle: 'left', data: { manualRouting: true } };
 check('linha ajustada à mão fica como está', assignFlowHandles(nodes, [manual], size)[0].sourceHandle === 'left');
 
+// Tipo automático é sempre Suave (sai reto quando alinhado); "Reta" só se a
+// pessoa escolheu no painel (data.userEdgeType).
+const alinh = [no('p', 'process', 0, 0), no('q', 'process', 0, 200)];
+const auto = assignFlowHandles(alinh, [{ ...ed('r1', 'p', 'q'), type: 'straight' }], size)[0];
+check('linha alinhada automática fica Suave (não Reta)', auto.type === 'smoothstep', auto.type);
+const escolhida = assignFlowHandles(alinh, [{ ...ed('r2', 'p', 'q'), type: 'straight', data: { userEdgeType: true } }], size)[0];
+check('Reta escolhida pela pessoa é mantida', escolhida.type === 'straight', escolhida.type);
+
 console.log(R.join('\n'));
 process.exit(R.some((l) => l.startsWith('FALHA')) ? 1 : 0);

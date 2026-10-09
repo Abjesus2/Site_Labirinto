@@ -65,10 +65,13 @@ export function assignFlowHandles<E extends EdgeLike>(nodes: NodeLike[], edges: 
       sourceHandle = 'left';
       targetHandle = 'left';
     }
-    const straight = sourceHandle === 'bottom' && targetHandle === 'top' && Math.abs(dx) <= 1;
     const data = { ...(edge.data || {}) };
     delete data.controlPoints;
-    return { ...edge, sourceHandle, targetHandle, type: straight ? 'straight' : 'smoothstep', data } as E;
+    // Sempre Suave: sai reto quando as pontas estão alinhadas e faz as
+    // dobras quando não estão (o tipo Reta automático ficava na diagonal ao
+    // religar a seta ou mover formas). Reta escolhida pela pessoa fica.
+    const type = edge.type === 'straight' && data.userEdgeType ? 'straight' : 'smoothstep';
+    return { ...edge, sourceHandle, targetHandle, type, data } as E;
   });
 
   // Saídas de uma mesma decisão em pontos diferentes (nunca duas pela base,
@@ -92,7 +95,7 @@ export function assignFlowHandles<E extends EdgeLike>(nodes: NodeLike[], edges: 
           const tgtNode = byId.get(e.target);
           const below = tgtNode ? center(tgtNode).y - center(dec).y > 20 : true;
           const targetHandle = below ? 'top' : h === 'bottom' ? 'top' : h;
-          out[i] = { ...out[i], sourceHandle: h, targetHandle, type: 'smoothstep' } as E;
+          out[i] = { ...out[i], sourceHandle: h, targetHandle, type: out[i].type === 'straight' && out[i].data?.userEdgeType ? 'straight' : 'smoothstep' } as E;
         }
         used.add(h);
       });

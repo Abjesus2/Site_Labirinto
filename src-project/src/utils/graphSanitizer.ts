@@ -40,17 +40,10 @@ export function ensureConnectedGraph(inputNodes: Node[], inputEdges: Edge[]): Co
     const src = nodes.find(n => n.id === sourceId);
     const tgt = nodes.find(n => n.id === targetId);
 
-    let edgeType: 'straight' | 'smoothstep' = 'smoothstep';
-    if (src && tgt && src.position && tgt.position) {
-      const isBothZero = src.position.x === 0 && tgt.position.x === 0 && src.position.y === 0 && tgt.position.y === 0;
-      if (!isBothZero) {
-        const srcCx = src.position.x + ((src.width as number) || 200) / 2;
-        const tgtCx = tgt.position.x + ((tgt.width as number) || 200) / 2;
-        if (Math.abs(srcCx - tgtCx) <= 1) {
-          edgeType = 'straight';
-        }
-      }
-    }
+    // Suave: sai reto quando alinhado e faz as dobras quando não (o tipo Reta
+    // automático ficava na diagonal ao mover/religar).
+    const edgeType = 'smoothstep' as const;
+    void src; void tgt;
 
     return {
       id: `e_dubious_${sourceId}_${targetId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
