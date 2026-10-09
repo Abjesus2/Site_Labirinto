@@ -1266,15 +1266,26 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   // Começa do início ou da forma selecionada, e durante a apresentação um
   // clique em qualquer forma continua a partir dela.
   // ---------------------------------------------------------------------
+  // Só recalcula quando o FLUXO muda (formas, posições, ligações) — não a
+  // cada passo da apresentação, que muda apenas a forma selecionada.
+  const presentationGraphKey = useMemo(() => {
+    if (!isPresentationMode) return '';
+    const n = nodes.map((nd) => `${nd.id}|${nd.type}|${Math.round(nd.position.x)}|${Math.round(nd.position.y)}|${nd.parentId || ''}|${String(nd.data?.label ?? '')}`).join('\n');
+    const e = edges.map((ed) => `${ed.source}>${ed.target}|${String(ed.label ?? '')}`).join('\n');
+    return `${n}#${e}`;
+  }, [isPresentationMode, nodes, edges]);
+  const presentationInputRef = useRef({ nodes, edges });
+  presentationInputRef.current = { nodes, edges };
   const presentationSteps = useMemo(() => {
     if (!isPresentationMode) return [];
+    const { nodes, edges } = presentationInputRef.current;
     const byId = new Map(nodes.map((n) => [n.id, n]));
     return presentationOrder(nodes as any, edges as any).map((id) => {
       const n = byId.get(id)!;
       const label = String(n.data?.label ?? '').replace(/\s+/g, ' ').trim();
       return { id, label: label || 'Forma sem texto' };
     });
-  }, [isPresentationMode, nodes, edges]);
+  }, [isPresentationMode, presentationGraphKey]);
   const presentationIndex = Math.max(0, presentationSteps.findIndex((st) => st.id === presentationNodeId));
 
   const focusPresentationNode = useCallback((nodeId: string, select = true) => {
