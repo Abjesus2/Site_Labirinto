@@ -1201,7 +1201,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
   }, [timingKey, timeSettings]);
 
   // Inject timing metadata and clean hierarchical zIndex into nodes before rendering
-  const enrichedNodeCacheRef = useRef(new WeakMap<Node, { timing: unknown; mode: boolean; out: Node }>());
+  const enrichedNodeCacheRef = useRef(new WeakMap<Node, { timing: unknown; mode: boolean; tone?: number; out: Node }>());
   const enrichedEdgeCacheRef = useRef(new WeakMap<Edge, Edge>());
   const enrichedNodes = useMemo(() => {
     const seenIds = new Set<string>();
@@ -1217,12 +1217,33 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
     // React Flow só redesenha a forma alterada (antes, qualquer mudança —
     // até arrastar uma forma — redesenhava todas).
     const cache = enrichedNodeCacheRef.current;
-    const nextCache = new WeakMap<Node, { timing: unknown; mode: boolean; out: Node }>();
+    const nextCache = new WeakMap<Node, { timing: unknown; mode: boolean; tone?: number; out: Node }>();
     enrichedNodeCacheRef.current = nextCache;
+    // Raias/quadros vizinhos alternam o tom de fundo (ver --lane-bg-* no
+    // index.css) em "xadrez": coluna (x) + posição na coluna (y), para que
+    // nenhuma raia encoste em outra do mesmo tom.
+    const laneTone = new Map<string, number>();
+    const containers = uniqueNodes.filter((n) => n.type === 'swimlane' || n.type === 'frame');
+    const columnXs: number[] = [];
+    containers
+      .map((n) => n.position.x)
+      .sort((a, b) => a - b)
+      .forEach((x) => { if (!columnXs.length || x - columnXs[columnXs.length - 1] > 4) columnXs.push(x); });
+    const columnOf = (x: number) => columnXs.findIndex((cx) => Math.abs(cx - x) <= 4);
+    const rowsByColumn = new Map<number, Node[]>();
+    containers.forEach((n) => {
+      const c = columnOf(n.position.x);
+      if (!rowsByColumn.has(c)) rowsByColumn.set(c, []);
+      rowsByColumn.get(c)!.push(n);
+    });
+    rowsByColumn.forEach((list, c) =>
+      list.sort((a, b) => a.position.y - b.position.y).forEach((n, r) => laneTone.set(n.id, (c + r) % 2)),
+    );
     return uniqueNodes.map((node) => {
       const timingCalc = nodeTimings[node.id];
+      const tone = laneTone.get(node.id);
       const hit = cache.get(node);
-      if (hit && hit.mode === showTimingMode && sameTiming(hit.timing, timingCalc)) {
+      if (hit && hit.mode === showTimingMode && hit.tone === tone && sameTiming(hit.timing, timingCalc)) {
         nextCache.set(node, hit);
         return hit.out;
       }
@@ -1239,10 +1260,11 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
         data: {
           ...node.data,
           calculatedTiming: timingCalc,
-          showTimingMode: showTimingMode
+          showTimingMode: showTimingMode,
+          ...(tone !== undefined ? { laneTone: tone } : {})
         }
       };
-      nextCache.set(node, { timing: timingCalc, mode: showTimingMode, out });
+      nextCache.set(node, { timing: timingCalc, mode: showTimingMode, tone, out });
       return out;
     });
   }, [nodes, nodeTimings, showTimingMode]);

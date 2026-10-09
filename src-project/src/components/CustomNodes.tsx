@@ -1045,8 +1045,11 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
         selected ? 'border-blue-500 ring-3 ring-blue-300/40 shadow-md' : 'border-zinc-300 hover:border-zinc-400'
       }`}
       style={{
-        backgroundColor: data.styleOverride?.backgroundColor || 'rgba(248, 250, 252, 0.65)',
-        borderColor: data.styleOverride?.borderColor || (selected ? '#3b82f6' : '#cbd5e1'),
+        // Cores das raias em variáveis (index.css): no modo claro o fundo
+        // alterna entre raias vizinhas (data.laneTone) e a borda é mais
+        // escura, para ver onde cada raia começa e termina.
+        backgroundColor: data.styleOverride?.backgroundColor || (data.laneTone ? 'var(--lane-bg-odd)' : 'var(--lane-bg-even)'),
+        borderColor: data.styleOverride?.borderColor || (selected ? '#3b82f6' : 'var(--lane-border)'),
         borderStyle: data.styleOverride?.borderStyle || 'dashed',
         ...pickBoxStyle(data.styleOverride),
         pointerEvents: 'none'
@@ -1063,10 +1066,11 @@ export const SwimlaneNode = ({ id, data, type, selected }: any) => {
       />
       <ContainerBorderHandles />
       <div
-        className="lane-drag-handle bg-zinc-100/90 border-b border-zinc-200/90 px-3.5 py-2 rounded-t-lg font-semibold text-xs text-zinc-700 flex items-center justify-between select-none shrink-0 cursor-move"
+        className="lane-drag-handle border-b px-3.5 py-2 rounded-t-lg font-semibold text-xs flex items-center justify-between select-none shrink-0 cursor-move"
         style={{
-          backgroundColor: data.styleOverride?.headerBg || undefined,
-          color: data.styleOverride?.headerColor || undefined,
+          backgroundColor: data.styleOverride?.headerBg || 'var(--lane-header-bg)',
+          borderBottomColor: 'var(--lane-header-border)',
+          color: data.styleOverride?.headerColor || 'var(--lane-header-text)',
           pointerEvents: 'auto'
         }}
       >
@@ -1091,8 +1095,8 @@ export const FrameNode = ({ id, data, type, selected }: any) => {
         selected ? 'border-blue-500 ring-3 ring-blue-300/40 shadow-lg' : 'border-zinc-400/60 hover:border-zinc-400'
       }`}
       style={{
-        backgroundColor: data.styleOverride?.backgroundColor || 'rgba(255, 255, 255, 0.45)',
-        borderColor: data.styleOverride?.borderColor || (selected ? '#3b82f6' : '#94a3b8'),
+        backgroundColor: data.styleOverride?.backgroundColor || (data.laneTone ? 'var(--frame-bg-odd)' : 'var(--frame-bg-even)'),
+        borderColor: data.styleOverride?.borderColor || (selected ? '#3b82f6' : 'var(--frame-border)'),
         ...pickBoxStyle(data.styleOverride),
         pointerEvents: 'none'
       }}

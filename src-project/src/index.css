@@ -530,3 +530,33 @@ html[data-theme="dark"] :is(.text-rose-900, [class^="text-rose-900/"], [class*="
     animation: none;
   }
 }
+
+/* ==========================================
+   RAIAS E QUADROS (cores padrão)
+   Modo claro: fundo cinza-azulado alternando entre raias vizinhas e borda
+   mais escura — antes o fundo era quase branco sobre o quadro branco e não
+   dava para ver onde cada raia começava e terminava. O modo escuro mantém
+   as cores de antes.
+   ========================================== */
+:root {
+  --lane-bg-even: rgba(241, 245, 249, 0.92);
+  --lane-bg-odd: rgba(226, 232, 240, 0.8);
+  --lane-border: #94a3b8;
+  --lane-header-bg: #e2e8f0;
+  --lane-header-border: #cbd5e1;
+  --lane-header-text: #334155;
+  --frame-bg-even: rgba(241, 245, 249, 0.75);
+  --frame-bg-odd: rgba(226, 232, 240, 0.65);
+  --frame-border: #64748b;
+}
+html[data-theme="dark"] {
+  --lane-bg-even: rgba(248, 250, 252, 0.65);
+  --lane-bg-odd: rgba(248, 250, 252, 0.65);
+  --lane-border: #cbd5e1;
+  --lane-header-bg: rgba(244, 244, 245, 0.9);
+  --lane-header-border: rgba(228, 228, 231, 0.9);
+  --lane-header-text: #3f3f46;
+  --frame-bg-even: rgba(255, 255, 255, 0.45);
+  --frame-bg-odd: rgba(255, 255, 255, 0.45);
+  --frame-border: #94a3b8;
+}
