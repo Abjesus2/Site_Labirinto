@@ -136,6 +136,16 @@ export const ALL_SHAPE_CATEGORIES = [
 
 export const ALL_SHAPES = ALL_SHAPE_CATEGORIES.flatMap(c => c.shapes);
 
+const BORDER_COLORS = [
+  { name: 'Grafite', value: '#0f172a' },
+  { name: 'Cinza', value: '#64748b' },
+  { name: 'Azul', value: '#2563eb' },
+  { name: 'Verde', value: '#16a34a' },
+  { name: 'Amarelo', value: '#d97706' },
+  { name: 'Vermelho', value: '#dc2626' },
+  { name: 'Roxo', value: '#7c3aed' },
+];
+
 const SIZE_PRESETS = [
   { label: 'Compacto', width: 140, height: 44 },
   { label: 'Padrão', width: 200, height: 56 },
@@ -722,16 +732,59 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
             </div>
           </div>
 
-          {/* Border Thickness, Radius & Style */}
-          <div className="bg-zinc-50 p-2.5 rounded-xl border border-zinc-200 space-y-2.5 mt-2">
-            {/* Border Thickness */}
+          {/* BORDA DA FORMA: cor, espessura e estilo (sem escolha = borda padrão da forma) */}
+          <div className="bg-zinc-50 p-2.5 rounded-xl border border-zinc-200 space-y-2.5 mt-2" data-border-panel>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Borda da Forma</span>
+              <button
+                onClick={() => applyStyle({ borderColor: null, borderWidth: null, borderStyle: null })}
+                disabled={!currentStyle.borderColor && !currentStyle.borderWidth && !currentStyle.borderStyle}
+                className="px-2 py-0.5 text-[10px] font-semibold rounded-md bg-white border border-zinc-200 text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-default cursor-pointer"
+                title="Voltar à borda padrão desta forma"
+                data-border-reset
+              >
+                Borda padrão
+              </button>
+            </div>
+
+            {/* Cor da borda */}
             <div className="flex flex-wrap items-center justify-between gap-1.5">
-              <span className="text-xs font-medium text-zinc-600">Espessura da Borda:</span>
+              <span className="text-xs font-medium text-zinc-600">Cor:</span>
+              <div className="flex flex-wrap items-center gap-1">
+                {BORDER_COLORS.map((c) => (
+                  <button
+                    key={c.value}
+                    onClick={() => applyStyle({ borderColor: c.value })}
+                    className={`w-5 h-5 rounded-md border-2 cursor-pointer transition-transform hover:scale-110 ${
+                      currentStyle.borderColor === c.value ? 'ring-2 ring-blue-500 ring-offset-1' : ''
+                    }`}
+                    style={{ borderColor: c.value, backgroundColor: '#ffffff' }}
+                    title={c.name}
+                    aria-label={`Borda ${c.name}`}
+                    data-border-color={c.value}
+                  />
+                ))}
+                <input
+                  type="color"
+                  value={currentStyle.borderColor || '#64748b'}
+                  onChange={(e) => applyStyle({ borderColor: e.target.value })}
+                  className="w-6 h-6 rounded-md border border-zinc-200 cursor-pointer p-0"
+                  title="Outra cor de borda"
+                  aria-label="Outra cor de borda"
+                  data-border-color-input
+                />
+              </div>
+            </div>
+
+            {/* Border Thickness */}
+            <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-zinc-200/60">
+              <span className="text-xs font-medium text-zinc-600">Espessura:</span>
               <div className="flex flex-wrap gap-1">
-                {['1px', '2px', '3px', '4px', '6px'].map((w) => (
+                {['1px', '2px', '3px', '4px', '6px', '8px'].map((w) => (
                   <button
                     key={w}
                     onClick={() => applyStyle({ borderWidth: w })}
+                    data-border-width={w}
                     className={`px-2 py-0.5 text-[11px] font-bold rounded-md transition-colors cursor-pointer ${
                       (currentStyle.borderWidth || '2px') === w
                         ? 'bg-blue-600 text-white'
@@ -739,6 +792,27 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
                     }`}
                   >
                     {w}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Border Style */}
+            <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-zinc-200/60">
+              <span className="text-xs font-medium text-zinc-600">Estilo:</span>
+              <div className="flex flex-wrap gap-1">
+                {(['solid', 'dashed', 'dotted', 'none'] as const).map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => applyStyle({ borderStyle: st })}
+                    data-border-style={st}
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition-colors cursor-pointer ${
+                      (currentStyle.borderStyle || 'solid') === st
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100'
+                    }`}
+                  >
+                    {st === 'solid' ? 'Sólida' : st === 'dashed' ? 'Tracejada' : st === 'dotted' ? 'Pontilhada' : 'Nenhuma'}
                   </button>
                 ))}
               </div>
@@ -786,25 +860,6 @@ export const MiroNodeToolbar: React.FC<MiroNodeToolbarProps> = ({
               </div>
             </div>
 
-            {/* Border Style */}
-            <div className="flex items-center justify-between pt-1 border-t border-zinc-200/60">
-              <span className="text-xs font-medium text-zinc-600">Estilo do Traço:</span>
-              <div className="flex gap-1">
-                {(['solid', 'dashed', 'dotted'] as const).map((st) => (
-                  <button
-                    key={st}
-                    onClick={() => applyStyle({ borderStyle: st })}
-                    className={`px-2 py-0.5 text-[10px] font-bold capitalize rounded-md transition-colors cursor-pointer ${
-                      (currentStyle.borderStyle || 'solid') === st
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-100'
-                    }`}
-                  >
-                    {st === 'solid' ? 'Sólida' : st === 'dashed' ? 'Tracejada' : 'Pontilhada'}
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
 

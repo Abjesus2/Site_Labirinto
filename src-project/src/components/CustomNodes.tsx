@@ -399,6 +399,40 @@ export const pickBoxStyle = (so: any = {}): Record<string, any> => {
   return out;
 };
 
+/**
+ * BORDA DAS FORMAS (painel: cor, espessura, estilo, sem borda). Sem escolha
+ * do usuário cada forma mantém a borda padrão dela.
+ * - Formas desenhadas em SVG usam svgBorderProps (o tracejado/pontilhado é
+ *   feito no traço do contorno, não numa caixa em volta).
+ * - BORDER_KEYS ficam de fora do estilo da caixa quando a borda é desenhada
+ *   de outro jeito (SVG, colchete da anotação).
+ */
+const BORDER_KEYS = ['borderColor', 'borderWidth', 'borderStyle'];
+const withoutBorder = (style: Record<string, any>) => {
+  const out = { ...style };
+  BORDER_KEYS.forEach((k) => delete out[k]);
+  return out;
+};
+const borderPx = (so: any, fallback = 2) => {
+  const v = parseFloat(String(so?.borderWidth ?? ''));
+  return Number.isFinite(v) ? v : fallback;
+};
+export const svgBorderProps = (so: any, color: string, selectedColor: string, selected: boolean) => {
+  const style = so?.borderStyle || 'solid';
+  if (style === 'none') return { stroke: 'none', strokeWidth: 0 };
+  const w = borderPx(so);
+  const width = selected ? Math.max(3, w) : w;
+  const dash =
+    style === 'dashed' ? `${Math.max(4, width * 3)} ${Math.max(3, width * 2)}` :
+    style === 'dotted' ? `0.1 ${Math.max(3, width * 2)}` : undefined;
+  return {
+    stroke: selected ? selectedColor : color,
+    strokeWidth: width,
+    strokeDasharray: dash,
+    strokeLinecap: (style === 'dotted' ? 'round' : undefined) as any,
+  };
+};
+
 const notifyResizeEnd = (id: string, params: { width: number; height: number }) => {
   window.dispatchEvent(
     new CustomEvent('flow-node-resize-end', {
@@ -577,8 +611,7 @@ export const DecisionNode = ({ id, data, type, selected }: any) => {
         <polygon
           points="50,0 100,50 50,100 0,50"
           fill={fillColor}
-          stroke={selected ? '#ca8a04' : strokeColor}
-          strokeWidth={selected ? 3 : (data.styleOverride?.borderWidth || 2)}
+          {...svgBorderProps(data.styleOverride, strokeColor, '#ca8a04', selected)}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
@@ -640,7 +673,10 @@ export const DatabaseNode = ({ id, data, type, selected }: any) => {
           className="absolute -top-2 left-0 right-0 h-4 border-2 rounded-[50%]"
           style={{
             backgroundColor: data.styleOverride?.backgroundColor || '#f3e8ff',
-            borderColor: data.styleOverride?.borderColor || '#a855f7'
+            borderColor: data.styleOverride?.borderColor || '#a855f7',
+            // a "tampa" do cilindro acompanha a borda escolhida
+            ...(data.styleOverride?.borderWidth ? { borderWidth: data.styleOverride.borderWidth } : {}),
+            ...(data.styleOverride?.borderStyle ? { borderStyle: data.styleOverride.borderStyle } : {})
           }}
         />
         <TagBadge tag={data.tag} />
@@ -688,8 +724,7 @@ export const DocumentNode = ({ id, data, type, selected }: any) => {
         <path
           d="M 0 0 L 100 0 L 100 85 Q 75 100 50 85 T 0 85 L 0 0 Z"
           fill={fillColor}
-          stroke={selected ? '#ea580c' : strokeColor}
-          strokeWidth={selected ? 3 : (data.styleOverride?.borderWidth || 2)}
+          {...svgBorderProps(data.styleOverride, strokeColor, '#ea580c', selected)}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
@@ -1121,8 +1156,7 @@ export const PreparationNode = ({ id, data, type, selected }: any) => {
         <polygon
           points="18,0 82,0 100,50 82,100 18,100 0,50"
           fill={fillColor}
-          stroke={selected ? '#0369a1' : strokeColor}
-          strokeWidth={selected ? 3 : (data.styleOverride?.borderWidth || 2)}
+          {...svgBorderProps(data.styleOverride, strokeColor, '#0369a1', selected)}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
@@ -1180,8 +1214,7 @@ export const ManualInputNode = ({ id, data, type, selected }: any) => {
         <polygon
           points="0,22 100,0 100,100 0,100"
           fill={fillColor}
-          stroke={selected ? '#334155' : strokeColor}
-          strokeWidth={selected ? 3 : (data.styleOverride?.borderWidth || 2)}
+          {...svgBorderProps(data.styleOverride, strokeColor, '#334155', selected)}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
@@ -1239,8 +1272,7 @@ export const ManualOpNode = ({ id, data, type, selected }: any) => {
         <polygon
           points="0,0 100,0 82,100 18,100"
           fill={fillColor}
-          stroke={selected ? '#b45309' : strokeColor}
-          strokeWidth={selected ? 3 : (data.styleOverride?.borderWidth || 2)}
+          {...svgBorderProps(data.styleOverride, strokeColor, '#b45309', selected)}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
@@ -1298,8 +1330,7 @@ export const DisplayNode = ({ id, data, type, selected }: any) => {
         <path
           d="M 15 0 L 80 0 Q 100 50 80 100 L 15 100 Q 0 50 15 0 Z"
           fill={fillColor}
-          stroke={selected ? '#0891b2' : strokeColor}
-          strokeWidth={selected ? 3 : (data.styleOverride?.borderWidth || 2)}
+          {...svgBorderProps(data.styleOverride, strokeColor, '#0891b2', selected)}
           vectorEffect="non-scaling-stroke"
         />
       </svg>
@@ -1444,6 +1475,8 @@ export const StoredDataNode = ({ id, data, type, selected }: any) => {
           fontSize: data.styleOverride?.fontSize || '14px',
           fontWeight: data.styleOverride?.fontWeight || '500',
           ...pickBoxStyle(data.styleOverride),
+          // a borda esquerda grossa é a marca desta forma: continua mais grossa
+          ...(data.styleOverride?.borderWidth ? { borderLeftWidth: `${Math.max(8, borderPx(data.styleOverride) * 2)}px` } : {}),
           width: '100%',
           height: '100%'
         }}
@@ -1477,17 +1510,30 @@ export const OffPageNode = ({ id, data, type, selected }: any) => {
         handleClassName="h-2.5 w-2.5 bg-white border-2 border-blue-600 rounded-sm shadow"
         onResizeEnd={(_, params) => notifyResizeEnd(id, params)}
       />
-      <div
-        className={`w-full h-full px-3 py-2 border-2 shadow-sm flex items-center justify-center text-center font-semibold transition-colors ${
-          selected ? 'ring-3 ring-blue-400/50 shadow-md border-blue-600' : 'border-blue-400 hover:border-blue-500'
+      {/* Contorno em SVG: com o recorte (clip-path) antigo as bordas
+          diagonais da ponta não apareciam e não aceitavam tracejado. */}
+      <svg
+        className={`absolute inset-0 w-full h-full overflow-visible transition-colors ${
+          selected ? 'filter drop-shadow-[0_0_6px_rgba(59,130,246,0.55)]' : ''
         }`}
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+      >
+        <polygon
+          points="0,0 100,0 100,70 50,100 0,70"
+          fill={data.styleOverride?.backgroundColor || '#eff6ff'}
+          {...svgBorderProps(data.styleOverride, data.styleOverride?.borderColor || '#3b82f6', '#2563eb', selected)}
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <div
+        className="relative w-full h-full px-3 py-2 flex items-center justify-center text-center font-semibold"
         style={{
-          backgroundColor: data.styleOverride?.backgroundColor || '#eff6ff',
-          borderColor: data.styleOverride?.borderColor || '#3b82f6',
-          clipPath: 'polygon(0% 0%, 100% 0%, 100% 70%, 50% 100%, 0% 70%)',
           color: data.styleOverride?.color || '#1e3a8a',
           fontSize: data.styleOverride?.fontSize || '12px',
-          ...pickBoxStyle(data.styleOverride),
+          ...withoutBorder(pickBoxStyle(data.styleOverride)),
+          backgroundColor: 'transparent',
           width: '100%',
           height: '100%'
         }}
@@ -1552,7 +1598,10 @@ export const AnnotationNode = ({ id, data, type, selected }: any) => {
           backgroundColor: data.styleOverride?.backgroundColor || '#fffbeb',
           borderColor: data.styleOverride?.borderColor || '#f59e0b',
           color: data.styleOverride?.color || '#78350f',
-          ...pickBoxStyle(data.styleOverride),
+          ...withoutBorder(pickBoxStyle(data.styleOverride)),
+          // a borda da anotação é só o "colchete" da esquerda
+          ...(data.styleOverride?.borderWidth ? { borderLeftWidth: data.styleOverride.borderWidth } : {}),
+          ...(data.styleOverride?.borderStyle ? { borderLeftStyle: data.styleOverride.borderStyle } : {}),
           width: '100%',
           height: '100%'
         }}

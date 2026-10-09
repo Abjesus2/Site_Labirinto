@@ -549,6 +549,13 @@ function useStableCallback<T extends (...args: any[]) => any>(fn: T): T {
   return useCallback(((...args: any[]) => ref.current(...args)) as T, []);
 }
 
+/** Junta estilos; valor null REMOVE a opção (volta ao padrão da forma). */
+function mergeStyleOverride(prev: Record<string, any>, updates: Record<string, any>): Record<string, any> {
+  const next: Record<string, any> = { ...prev, ...updates };
+  Object.keys(updates).forEach((k) => { if (updates[k] === null) delete next[k]; });
+  return next;
+}
+
 /** Seleciona só `id`, sem recriar os itens cuja seleção não muda. */
 function selectOnly<T extends { id: string; selected?: boolean }>(items: T[], id: string): T[] {
   return items.map((i) => (!!i.selected === (i.id === id) ? i : { ...i, selected: i.id === id }));
@@ -2517,7 +2524,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           ...n,
           data: {
             ...n.data,
-            styleOverride: { ...prevStyle, ...styleUpdates }
+            styleOverride: mergeStyleOverride(prevStyle, styleUpdates)
           }
         };
       }
@@ -2538,7 +2545,7 @@ function FlowEditorContent({ diagramId, onBack }: FlowEditorProps) {
           ...n,
           data: {
             ...n.data,
-            styleOverride: { ...prevStyle, ...styleUpdates }
+            styleOverride: mergeStyleOverride(prevStyle, styleUpdates)
           }
         };
       }
