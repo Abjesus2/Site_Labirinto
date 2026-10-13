@@ -422,6 +422,8 @@ export function computeBizagiGeometry(inputNodes: BizagiInputNode[], inputEdges:
 
 export interface BizagiLane {
   name: string;
+  /** Setores da faixa (mais de um = setores lado a lado juntados numa faixa só). */
+  sectors: string[];
   /** Faixa vertical da raia (coordenadas da geometria, antes do deslocamento da pool). */
   y1: number;
   y2: number;
@@ -436,8 +438,10 @@ export interface BizagiLane {
  *
  * Raias não podem se sobrepor: se dois setores dividem a mesma altura
  * (formas lado a lado de setores diferentes), a faixa leva os dois nomes
- * ("A / B"). O mesmo setor pode aparecer em mais de uma faixa quando o
- * fluxo volta a ele mais adiante.
+ * ("A / B") — o export (generateBizagiBpm) não usa faixas assim: nesse caso
+ * ele reorganiza com stackSectorsIntoLanes, uma raia por setor. O mesmo
+ * setor pode aparecer em mais de uma faixa quando o fluxo volta a ele mais
+ * adiante.
  *
  * Só para fluxo de cima para baixo e com 2+ setores; senão devolve [].
  */
@@ -506,9 +510,17 @@ export function computeBizagiLanes(geom: BizagiGeometry, deptById: Map<string, s
   }
   if (bands.length < 2) return [];
 
-  // Divisas no espaço livre entre uma faixa e a próxima — de preferência
-  // no meio, mas nunca em cima de um trecho horizontal de seta (a divisa e
-  // a seta se confundiriam). A primeira e a última vão até as bordas.
+  return bandsToLanes(geom, bands);
+}
+
+/**
+ * Divisas no espaço livre entre uma faixa e a próxima — de preferência no
+ * meio, mas nunca em cima de um trecho horizontal de seta (a divisa e a
+ * seta se confundiriam). A primeira e a última vão até as bordas.
+ */
+type LaneBand = { names: string[]; top: number; bot: number; ids: string[] };
+
+function bandsToLanes(geom: BizagiGeometry, bands: LaneBand[]): BizagiLane[] {
   const horizontalYs: number[] = [];
   geom.edges.forEach((e) => {
     for (let i = 0; i < e.points.length - 1; i++) {
@@ -516,7 +528,7 @@ export function computeBizagiLanes(geom: BizagiGeometry, deptById: Map<string, s
     }
   });
   const clear = (y: number) => horizontalYs.every((hy) => Math.abs(hy - y) > 14);
-  const divider = (upper: Band, lower: Band): number => {
+  const divider = (upper: LaneBand, lower: LaneBand): number => {
     const lo = upper.bot;
     const hi = lower.top;
     const mid = (lo + hi) / 2;
@@ -528,8 +540,207 @@ export function computeBizagiLanes(geom: BizagiGeometry, deptById: Map<string, s
   const PAD = 30;
   return bands.map((b, i) => ({
     name: b.names.filter(Boolean).join(' / ') || 'Processo',
+    sectors: b.names.filter(Boolean),
     y1: i === 0 ? geom.bounds.minY - PAD : dividers[i - 1],
     y2: i === bands.length - 1 ? geom.bounds.maxY + PAD : dividers[i],
     nodeIds: b.ids,
   }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Setores lado a lado: uma raia por setor                              */
+/* ------------------------------------------------------------------ */
+
+export interface SectorStackNode {
+  id: string;
+  /** Caixa da forma no site. */
+  box: BBox;
+  /** Setor da forma ('' = sem setor). */
+  sector: string;
+  /** Raia/quadro do site que contém a forma (o menor), se houver. */
+  holderId?: string;
+}
+
+export interface SectorStackContainer {
+  id: string;
+  label: string;
+  box: BBox;
+}
+
+export interface SectorStack {
+  /** Nova caixa de cada forma (mesmo sistema de coordenadas do site). */
+  boxes: Map<string, BBox>;
+  /** Raias na ordem, de cima para baixo: um setor por raia. */
+  groups: { name: string; nodeIds: string[] }[];
+}
+
+const STACK_LANE_GAP = 110; // espaço entre o conteúdo de uma raia e o da próxima
+const STACK_BLOCK_GAP = 70; // espaço entre dois blocos (quadros) do mesmo setor
+const LOOSE_PAD = 40;
+
+/**
+ * Quando os setores ficam LADO A LADO no site (quadros/raias em colunas ou em
+ * grade), faixas horizontais por altura juntariam setores diferentes numa
+ * raia só ("A / B / C") e as formas cairiam na raia de outro setor. O Bizagi
+ * só tem raias horizontais, então aqui cada setor ganha a SUA raia, e as
+ * raias são empilhadas na ordem em que o fluxo passa por elas.
+ *
+ * Cada quadro do site vira um bloco que é movido inteiro para a raia do seu
+ * setor — a disposição das formas dentro do quadro não muda. Se o mesmo setor
+ * aparece em vários quadros, eles ficam lado a lado na mesma raia (na ordem
+ * do site, da esquerda para a direita). Formas do setor fora de quadro formam
+ * um bloco à parte. Forma sem setor vai para o setor da forma ligada a ela
+ * mais próxima no fluxo.
+ *
+ * Só reposiciona; as setas são recalculadas depois por computeBizagiGeometry.
+ */
+export function stackSectorsIntoLanes(
+  nodes: SectorStackNode[],
+  containers: SectorStackContainer[],
+  edges: { source: string; target: string }[],
+): SectorStack {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const valid = edges.filter((e) => byId.has(e.source) && byId.has(e.target) && e.source !== e.target);
+  const out = new Map<string, string[]>();
+  const inc = new Map<string, string[]>();
+  valid.forEach((e) => {
+    (out.get(e.source) || out.set(e.source, []).get(e.source)!).push(e.target);
+    (inc.get(e.target) || inc.set(e.target, []).get(e.target)!).push(e.source);
+  });
+
+  // 1) Setor de cada forma; sem setor → setor da forma ligada mais próxima
+  // (busca em largura, olhando primeiro quem vem antes no fluxo).
+  const sectorOf = new Map<string, string>();
+  nodes.forEach((n) => { if (n.sector.trim()) sectorOf.set(n.id, n.sector.trim()); });
+  const firstSector = nodes.find((n) => sectorOf.has(n.id)) ? sectorOf.get(nodes.find((n) => sectorOf.has(n.id))!.id)! : 'Processo';
+  nodes.forEach((n) => {
+    if (sectorOf.has(n.id)) return;
+    const seen = new Set([n.id]);
+    let frontier = [n.id];
+    let found = '';
+    while (frontier.length && !found) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        for (const nb of [...(inc.get(id) || []), ...(out.get(id) || [])]) {
+          if (seen.has(nb)) continue;
+          seen.add(nb);
+          const s = byId.get(nb)!.sector.trim();
+          if (s) { found = s; break; }
+          next.push(nb);
+        }
+        if (found) break;
+      }
+      frontier = next;
+    }
+    sectorOf.set(n.id, found || firstSector);
+  });
+
+  // 2) Blocos: o quadro do site (se for do mesmo setor da forma) ou um bloco
+  // "solto" por setor com as formas fora de quadro.
+  const containerById = new Map(containers.map((c) => [c.id, c]));
+  type Block = { key: string; sector: string; box: BBox; ids: string[] };
+  const blocks = new Map<string, Block>();
+  const union = (a: BBox | undefined, b: BBox): BBox => {
+    if (!a) return { ...b };
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    return { x, y, width: Math.max(right(a), right(b)) - x, height: Math.max(bottom(a), bottom(b)) - y };
+  };
+  nodes.forEach((n) => {
+    const sector = sectorOf.get(n.id)!;
+    const holder = n.holderId ? containerById.get(n.holderId) : undefined;
+    const key = holder && holder.label.trim() === sector ? `c:${holder.id}` : `s:${sector}`;
+    let b = blocks.get(key);
+    if (!b) {
+      b = { key, sector, box: holder && key.startsWith('c:') ? { ...holder.box } : { ...n.box }, ids: [] };
+      blocks.set(key, b);
+    }
+    b.box = union(b.box, n.box);
+    b.ids.push(n.id);
+  });
+  blocks.forEach((b) => {
+    if (b.key.startsWith('s:')) b.box = { x: b.box.x - LOOSE_PAD, y: b.box.y - LOOSE_PAD, width: b.box.width + 2 * LOOSE_PAD, height: b.box.height + 2 * LOOSE_PAD };
+  });
+
+  // 3) Ordem das raias: a ordem em que o fluxo chega a cada setor (busca em
+  // largura a partir dos inícios); empate ou setor fora do fluxo → ordem de
+  // leitura do site (coluna da esquerda primeiro, depois de cima para baixo).
+  const rank = new Map<string, number>();
+  const starts = nodes.filter((n) => !(inc.get(n.id) || []).length).map((n) => n.id);
+  let frontier = starts;
+  starts.forEach((id) => rank.set(id, 0));
+  let depth = 0;
+  while (frontier.length) {
+    depth++;
+    const next: string[] = [];
+    frontier.forEach((id) => (out.get(id) || []).forEach((t) => { if (!rank.has(t)) { rank.set(t, depth); next.push(t); } }));
+    frontier = next;
+  }
+  const sectorInfo = new Map<string, { rank: number; x: number; y: number }>();
+  blocks.forEach((b) => {
+    const r = Math.min(...b.ids.map((id) => rank.get(id) ?? Infinity));
+    const cur = sectorInfo.get(b.sector);
+    if (!cur) sectorInfo.set(b.sector, { rank: r, x: b.box.x, y: b.box.y });
+    else sectorInfo.set(b.sector, { rank: Math.min(cur.rank, r), x: Math.min(cur.x, b.box.x), y: Math.min(cur.y, b.box.y) });
+  });
+  const sectors = [...sectorInfo.entries()]
+    .sort((a, b) => a[1].rank - b[1].rank || a[1].x - b[1].x || a[1].y - b[1].y)
+    .map(([s]) => s);
+
+  // Direção do fluxo no site (mesma regra de computeBizagiGeometry).
+  let down = 0;
+  let side = 0;
+  valid.forEach((e) => {
+    const a = byId.get(e.source)!.box;
+    const b = byId.get(e.target)!.box;
+    side += Math.abs(cx(b) - cx(a));
+    down += Math.abs(cy(b) - cy(a));
+  });
+  const leftToRight = side > down * 1.2;
+
+  // 4) Empilha: cada setor numa faixa; os blocos do setor lado a lado. No
+  // fluxo da esquerda para a direita cada raia começa onde a anterior
+  // termina (em escada), para a seta de um setor para o seguinte seguir
+  // para a frente em vez de voltar por cima das formas.
+  const boxes = new Map<string, BBox>();
+  const groups: SectorStack['groups'] = [];
+  let top = 0;
+  let startX = 0;
+  sectors.forEach((sector) => {
+    const list = [...blocks.values()].filter((b) => b.sector === sector).sort((a, b) => a.box.x - b.box.x || a.box.y - b.box.y);
+    let x = startX;
+    let tallest = 0;
+    const nodeIds: string[] = [];
+    list.forEach((b) => {
+      b.ids.forEach((id) => {
+        const nb = byId.get(id)!.box;
+        boxes.set(id, { x: x + nb.x - b.box.x, y: top + nb.y - b.box.y, width: nb.width, height: nb.height });
+        nodeIds.push(id);
+      });
+      x += b.box.width + STACK_BLOCK_GAP;
+      tallest = Math.max(tallest, b.box.height);
+    });
+    groups.push({ name: sector, nodeIds });
+    top += tallest + STACK_LANE_GAP;
+    if (leftToRight) startX = x - STACK_BLOCK_GAP + STACK_LANE_GAP;
+  });
+  return { boxes, groups };
+}
+
+/** Raias a partir de grupos já definidos (um setor por grupo, na ordem). */
+export function computeLanesFromGroups(geom: BizagiGeometry, groups: { name: string; nodeIds: string[] }[]): BizagiLane[] {
+  const bands = groups
+    .map((g) => {
+      let top = Infinity;
+      let bot = -Infinity;
+      g.nodeIds.forEach((id) => {
+        const n = geom.nodes.get(id);
+        if (!n) return;
+        top = Math.min(top, n.box.y, n.labelBox.y);
+        bot = Math.max(bot, n.box.y + n.box.height, n.labelBox.y + n.labelBox.height);
+      });
+      return { names: [g.name], top, bot, ids: g.nodeIds.filter((id) => geom.nodes.has(id)) };
+    })
+    .filter((b) => b.ids.length);
+  return bands.length ? bandsToLanes(geom, bands) : [];
 }

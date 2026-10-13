@@ -11,7 +11,7 @@
  * outro formato permite representar.
  */
 import { getNodeDimensions } from '../components/CustomNodes';
-import { computeBizagiGeometry, computeBizagiLanes, BBox as BizagiGeomBox, BizagiKind } from './bizagiLayout';
+import { computeBizagiGeometry, computeBizagiLanes, computeLanesFromGroups, stackSectorsIntoLanes, BBox as BizagiGeomBox, BizagiKind } from './bizagiLayout';
 
 interface Point {
   x: number;
@@ -370,29 +370,58 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
 
   // Geometria nativa do Bizagi (tamanhos, área do texto e setas
   // recalculadas) — ver utils/bizagiLayout.ts.
-  const geom = computeBizagiGeometry(
+  const edgesIn = edges.map((e) => ({ id: e.id, source: e.source, target: e.target, label: e.label }));
+  let geom = computeBizagiGeometry(
     flowNodes.map((n) => ({ id: n.id, type: n.type, box: geomBox(n) })),
-    edges.map((e) => ({ id: e.id, source: e.source, target: e.target, label: e.label })),
+    edgesIn,
   );
 
   // Raias: setor de cada forma (campo "department" da etapa ou a raia/
   // quadro do site em que ela está) — ver computeBizagiLanes.
   const containers = nodes.filter((n) => n.type === 'swimlane' || n.type === 'frame');
   const deptById = new Map<string, string>();
+  const holderById = new Map<string, string>();
   flowNodes.forEach((n) => {
+    const b = getNodeBox(n);
+    const c = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    const holder = containers
+      .map((ct) => ({ ct, box: getNodeBox(ct) }))
+      .filter(({ box }) => c.x >= box.x && c.x <= box.x + box.width && c.y >= box.y && c.y <= box.y + box.height)
+      .sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
+    if (holder) holderById.set(n.id, holder.ct.id);
     let dept = String(n.data?.timing?.department || '').trim();
-    if (!dept) {
-      const b = getNodeBox(n);
-      const c = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-      const holder = containers
-        .map((ct) => ({ ct, box: getNodeBox(ct) }))
-        .filter(({ box }) => c.x >= box.x && c.x <= box.x + box.width && c.y >= box.y && c.y <= box.y + box.height)
-        .sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
-      if (holder) dept = String(holder.ct.data?.label || '').trim();
-    }
+    if (!dept && holder) dept = String(holder.ct.data?.label || '').trim();
     deptById.set(n.id, dept);
   });
-  const lanes = computeBizagiLanes(geom, deptById);
+  let lanes = computeBizagiLanes(geom, deptById);
+
+  // Setores lado a lado no site (quadros/raias em colunas ou em grade): as
+  // faixas por altura juntariam setores diferentes numa raia só ("A / B") e
+  // as formas cairiam na raia de outro setor. Nesse caso cada setor ganha a
+  // sua raia: os quadros são movidos inteiros para a raia do seu setor e as
+  // setas são recalculadas — ver stackSectorsIntoLanes.
+  // Também quando TODOS ficam lado a lado (a faixa única juntada some e o
+  // arquivo sairia sem raia nenhuma) e no fluxo da esquerda para a direita.
+  const distinctSectors = new Set([...deptById.values()].filter(Boolean));
+  const bandsOk = lanes.length >= 2 && lanes.every((ln) => ln.sectors.length === 1);
+  if (distinctSectors.size >= 2 && !bandsOk) {
+    // Mesma rotação das formas (raias verticais do site), agora para as caixas
+    // das raias/quadros: o centro troca x↔y e a caixa gira junto.
+    const containerBox = (ct: any) => {
+      const b = getNodeBox(ct);
+      return verticalLanes ? { x: b.y, y: b.x, width: b.height, height: b.width } : b;
+    };
+    const stack = stackSectorsIntoLanes(
+      flowNodes.map((n) => ({ id: n.id, box: geomBox(n), sector: deptById.get(n.id) || '', holderId: holderById.get(n.id) })),
+      containers.map((ct) => ({ id: ct.id, label: String(ct.data?.label || ''), box: containerBox(ct) })),
+      edgesIn,
+    );
+    geom = computeBizagiGeometry(
+      flowNodes.map((n) => ({ id: n.id, type: n.type, box: stack.boxes.get(n.id)! })),
+      edgesIn,
+    );
+    lanes = computeLanesFromGroups(geom, stack.groups);
+  }
   const laneIds = lanes.map(() => uuid());
   // Cada forma diz em qual raia está (LaneId) e também fica inteira dentro
   // da faixa dela. Sem o LaneId o Ctrl+Z do Bizagi (depois de apagar tudo)

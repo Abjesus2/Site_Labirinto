@@ -198,4 +198,67 @@ check('o ponto de partida fica na borda direita do círculo, na altura do centro
   check('cada forma na raia do seu setor e dentro dela', ok);
 }
 
+// Quadros do site em GRADE (colunas lado a lado, quadros empilhados em
+// algumas colunas) — o "Diagrama Controladora". Antes as faixas por altura
+// juntavam setores diferentes ("Recebimento / ZZREPA / Expedição") e as
+// formas caíam na raia de outro setor. Agora: uma raia por setor, cada forma
+// inteira dentro da raia do SEU setor, setas ortogonais sem cruzar formas.
+{
+  const F = (id, label, x, y, w, h) => ({ id, type: 'frame', position: { x, y }, style: { width: w, height: h }, data: { label } });
+  const N = (id, type, x, y) => ({ id, type, position: { x, y }, data: { label: id } });
+  const nos = [
+    F('F1', 'Recebimento', 0, 0, 520, 700), F('F2', 'Logística Reversa', 0, 740, 520, 660), F('F3', 'ZZREPA', 560, 0, 700, 1400),
+    F('F4', 'Expedição', 1300, 0, 600, 600), F('F5', 'Faturamento', 1300, 640, 600, 760),
+    N('ini', 'start', 180, 70), N('a1', 'process', 160, 170), N('d1', 'decision', 155, 410), N('a2', 'process', 330, 560), N('a3', 'process', 60, 560),
+    N('b1', 'process', 160, 800), N('b2', 'process', 160, 930),
+    N('c1', 'process', 820, 80), N('c2', 'process', 820, 360), N('d3', 'decision', 815, 500), N('c3', 'process', 620, 680), N('c4', 'process', 1000, 680), N('c5', 'process', 820, 900),
+    N('f1', 'process', 1520, 80), N('f2', 'process', 1520, 220),
+    N('g1', 'process', 1520, 720), N('d5', 'decision', 1515, 1030), N('fim', 'end', 1540, 1260),
+  ];
+  const setor = { ini: 'Recebimento', a1: 'Recebimento', d1: 'Recebimento', a2: 'Recebimento', a3: 'Recebimento', b1: 'Logística Reversa', b2: 'Logística Reversa',
+    c1: 'ZZREPA', c2: 'ZZREPA', d3: 'ZZREPA', c3: 'ZZREPA', c4: 'ZZREPA', c5: 'ZZREPA', f1: 'Expedição', f2: 'Expedição', g1: 'Faturamento', d5: 'Faturamento', fim: 'Faturamento' };
+  const lig = [['ini', 'a1'], ['a1', 'd1'], ['d1', 'a2', 'Sim'], ['d1', 'a3', 'Não'], ['a2', 'b1'], ['a3', 'b1'], ['b1', 'b2'], ['b2', 'c1'], ['c1', 'c2'], ['c2', 'd3'],
+    ['d3', 'c3', 'Não'], ['d3', 'c4', 'Sim'], ['c3', 'c5'], ['c4', 'c5'], ['c5', 'f1'], ['f1', 'f2'], ['f2', 'g1'], ['g1', 'd5'], ['d5', 'fim', 'Não'], ['d5', 'c2', 'Sim']]
+    .map(([a, b, l], i) => ({ id: 'q' + i, source: a, target: b, label: l, data: {} }));
+  const bq = await generateBizagiBpm(nos, lig, 'Grade');
+  const zq = await JSZip.loadAsync(Buffer.from(await bq.arrayBuffer()));
+  const dq = await JSZip.loadAsync(await zq.file(Object.keys(zq.files).find((n) => n.endsWith('.diag'))).async('nodebuffer'));
+  const xq = await dq.file('Diagram.xml').async('string');
+  const pq = [...xq.matchAll(/<Pool Id="([^"]+)" Name="([^"]*)"[^>]*>([\s\S]*?)<\/Pool>/g)].find((p) => p[2] === 'Grade');
+  const lq = [...pq[3].matchAll(/<Lane Id="([^"]+)" Name="([^"]*)"[\s\S]*?Height="(\d+)" Width="(\d+)"[^>]*><Coordinates XCoordinate="(\d+)" YCoordinate="(\d+)"/g)].map((m) => ({ id: m[1], name: m[2], h: +m[3], w: +m[4], x: +m[5], y: +m[6] }));
+  check('quadros em grade: uma raia por setor, nenhuma com setores juntados', lq.length === 5 && lq.every((l) => !l.name.includes(' / ')), lq.map((l) => l.name).join(' | '));
+  check('quadros em grade: raias na ordem em que o fluxo passa pelos setores', lq.map((l) => l.name).join() === 'Recebimento,Logística Reversa,ZZREPA,Expedição,Faturamento', lq.map((l) => l.name).join());
+  check('quadros em grade: raias encostadas, sem buraco', lq.every((l, i) => i === 0 || l.y === lq[i - 1].y + lq[i - 1].h));
+  const acts = [...xq.matchAll(/<Activity Id="([^"]+)" Name="([^"]*)">[\s\S]*?LaneId="([^"]+)" Height="(\d+)" Width="(\d+)"[^>]*TextY="(-?\d+)"[^>]*TextHeight="(\d+)"[^>]*><Coordinates XCoordinate="(-?\d+)" YCoordinate="(-?\d+)"/g)]
+    .map((m) => ({ id: m[1], name: m[2], lane: lq.find((l) => l.id === m[3]), h: +m[4], w: +m[5], ty: +m[6], th: +m[7], x: +m[8], y: +m[9] }));
+  check('quadros em grade: toda forma aponta para a raia do SEU setor', acts.length === Object.keys(setor).length && acts.every((a) => a.lane?.name === setor[a.name]), acts.filter((a) => a.lane?.name !== setor[a.name]).map((a) => `${a.name}→${a.lane?.name}`).join(', '));
+  check('quadros em grade: forma e texto inteiros dentro da faixa da raia', acts.every((a) => a.y >= a.lane.y && a.y + a.h <= a.lane.y + a.lane.h && a.ty >= a.lane.y && a.ty + a.th <= a.lane.y + a.lane.h));
+  const byId = new Map(acts.map((a) => [a.id, a]));
+  const trq = [...xq.matchAll(/<Transition Id="[^"]+" From="([^"]+)" To="([^"]+)"[^>]*>([\s\S]*?)<\/Transition>/g)].map((t) => ({ f: t[1], t: t[2], pts: [...t[3].matchAll(/XCoordinate="(-?\d+)" YCoordinate="(-?\d+)"/g)].map((m) => ({ x: +m[1], y: +m[2] })) }));
+  check('quadros em grade: todas as setas exportadas', trq.length === lig.length);
+  check('quadros em grade: setas só com trechos horizontais/verticais', trq.every((t) => t.pts.every((p, i) => i === 0 || p.x === t.pts[i - 1].x || p.y === t.pts[i - 1].y)));
+  const corta = (p, q, b) => Math.min(p.x, q.x) < b.x + b.w - 1 && Math.max(p.x, q.x) > b.x + 1 && Math.min(p.y, q.y) < b.y + b.h - 1 && Math.max(p.y, q.y) > b.y + 1;
+  check('quadros em grade: nenhuma seta atravessa outra forma', trq.every((t) => t.pts.every((p, i) => i === 0 || acts.every((a) => a.id === t.f || a.id === t.t || !corta(t.pts[i - 1], p, a)))));
+  // A disposição DENTRO de cada quadro não muda (só o quadro inteiro se move).
+  const dentro = byId && acts.find((a) => a.name === 'c3') && acts.find((a) => a.name === 'c4');
+  const c3 = acts.find((a) => a.name === 'c3'), c4 = acts.find((a) => a.name === 'c4');
+  check('quadros em grade: formas do mesmo quadro mantêm a posição relativa', !!dentro && c4.x + c4.w / 2 - (c3.x + c3.w / 2) === 380 && c4.y === c3.y);
+}
+
+// Todos os setores lado a lado (setor pelo campo "department", sem quadros):
+// antes viravam uma faixa só juntada e o arquivo saía SEM raia nenhuma.
+{
+  const N = (id, type, x, y, d) => ({ id, type, position: { x, y }, data: { label: id, timing: { department: d } } });
+  const nos = [N('i', 'start', 40, 0, 'Vendas'), N('v1', 'process', 0, 150, 'Vendas'), N('e1', 'process', 400, 150, 'Estoque'), N('v2', 'process', 0, 320, 'Vendas'), N('e2', 'process', 400, 320, 'Estoque'), N('f', 'end', 440, 500, 'Estoque')];
+  const lig = [['i', 'v1'], ['v1', 'e1'], ['e1', 'v2'], ['v2', 'e2'], ['e2', 'f']].map(([a, b], i) => ({ id: 'w' + i, source: a, target: b, data: {} }));
+  const bw = await generateBizagiBpm(nos, lig, 'Lado a Lado');
+  const zw = await JSZip.loadAsync(Buffer.from(await bw.arrayBuffer()));
+  const dw = await JSZip.loadAsync(await zw.file(Object.keys(zw.files).find((n) => n.endsWith('.diag'))).async('nodebuffer'));
+  const xw = await dw.file('Diagram.xml').async('string');
+  const lw = [...xw.matchAll(/<Lane Id="([^"]+)" Name="([^"]*)"/g)].map((m) => ({ id: m[1], name: m[2] }));
+  check('setores lado a lado em toda a altura: uma raia por setor (não some)', lw.map((l) => l.name).join() === 'Vendas,Estoque', lw.map((l) => l.name).join());
+  const laneOf = (name) => { const m = new RegExp(`<Activity Id="[^"]+" Name="${name}">[\\s\\S]*?LaneId="([^"]+)"`).exec(xw); return m && lw.find((l) => l.id === m[1])?.name; };
+  check('setores lado a lado em toda a altura: cada forma na raia do seu setor', ['i', 'v1', 'v2'].every((n) => laneOf(n) === 'Vendas') && ['e1', 'e2', 'f'].every((n) => laneOf(n) === 'Estoque'));
+}
+
 console.log(R.join('\n'));

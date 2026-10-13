@@ -1,4 +1,4 @@
-import { computeBizagiGeometry, computeBizagiLanes } from '../.tmp-bizagiLayout.mjs';
+import { computeBizagiGeometry, computeBizagiLanes, stackSectorsIntoLanes, computeLanesFromGroups } from '../.tmp-bizagiLayout.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -109,9 +109,39 @@ check('seta para forma inexistente é descartada', g2.edges.length === edges.len
   // Setores diferentes lado a lado na mesma altura: a faixa leva os dois nomes.
   const dept = new Map([['ini', 'A'], ['a', 'A'], ['b', 'A'], ['dec', 'A'], ['sim', 'B'], ['nao', 'C'], ['c', 'B'], ['fim', 'B']]);
   const lanes = computeBizagiLanes(g, dept);
+  // Só a função de faixas: o export troca esse caso por uma raia por setor
+  // (stackSectorsIntoLanes; ver o teste de quadros em grade em bizagiBpm.mjs).
   check('setores lado a lado na mesma altura dividem uma faixa com os dois nomes', lanes.some((l) => l.name === 'B / C' || l.name === 'C / B'), lanes.map((l) => l.name).join(' | '));
 }
 check('um setor só: sem raias', computeBizagiLanes(g, new Map([...g.nodes.keys()].map((id) => [id, 'Único']))).length === 0);
+// Só a função de faixas; o export, com 2+ setores, usa stackSectorsIntoLanes.
 check('fluxo horizontal: sem raias (evita arquivo que o Bizagi não represente)', computeBizagiLanes(hg, new Map([['s', 'A'], ['p', 'A'], ['q', 'B'], ['f', 'B']])).length === 0);
 
+
+// Setores lado a lado → uma raia por setor (stackSectorsIntoLanes)
+{
+  const box = (x, y, w = 160, h = 60) => ({ x, y, width: w, height: h });
+  const nodes = [
+    { id: 'i', box: box(20, 20, 30, 30), sector: '', holderId: 'qa' },
+    { id: 'a1', box: box(0, 100), sector: 'A', holderId: 'qa' },
+    { id: 'b1', box: box(400, 100), sector: 'B', holderId: 'qb' },
+    { id: 'a2', box: box(800, 100), sector: 'A', holderId: 'qa2' },
+    { id: 'solta', box: box(400, 600), sector: '' },
+  ];
+  const containers = [
+    { id: 'qa', label: 'A', box: box(-40, -40, 300, 300) },
+    { id: 'qb', label: 'B', box: box(360, -40, 300, 300) },
+    { id: 'qa2', label: 'A', box: box(760, -40, 300, 300) },
+  ];
+  const edges = [{ source: 'i', target: 'a1' }, { source: 'a1', target: 'b1' }, { source: 'b1', target: 'solta' }, { source: 'solta', target: 'a2' }];
+  const st = stackSectorsIntoLanes(nodes, containers, edges);
+  check('um grupo por setor, na ordem do fluxo', st.groups.map((g) => g.name).join() === 'A,B', st.groups.map((g) => g.name).join());
+  check('forma sem setor vai para o setor da forma ligada mais próxima (antes no fluxo)', st.groups[0].nodeIds.includes('i') && st.groups[1].nodeIds.includes('solta'));
+  check('dois quadros do mesmo setor ficam lado a lado na mesma raia', st.groups[0].nodeIds.includes('a1') && st.groups[0].nodeIds.includes('a2') && st.boxes.get('a2').x > st.boxes.get('a1').x + 160 && st.boxes.get('a2').y === st.boxes.get('a1').y);
+  check('posição relativa dentro do quadro mantida', st.boxes.get('a1').x - st.boxes.get('i').x === -20 && st.boxes.get('a1').y - st.boxes.get('i').y === 80);
+  check('raia seguinte começa abaixo da anterior', Math.min(...st.groups[1].nodeIds.map((id) => st.boxes.get(id).y)) > Math.max(...st.groups[0].nodeIds.map((id) => st.boxes.get(id).y + st.boxes.get(id).height)));
+  const g = computeBizagiGeometry(nodes.map((n) => ({ id: n.id, type: n.id === 'i' ? 'start' : 'process', box: st.boxes.get(n.id) })), edges.map((e, k) => ({ id: 'z' + k, ...e })));
+  const lanes = computeLanesFromGroups(g, st.groups);
+  check('raias dos grupos: uma por setor, encostadas, cada forma dentro da sua', lanes.length === 2 && lanes[0].y2 === lanes[1].y1 && lanes.every((l) => l.sectors.length === 1 && l.nodeIds.every((id) => { const b = g.nodes.get(id).box; return b.y >= l.y1 && b.y + b.height <= l.y2; })));
+}
 console.log(R.join('\n'));
