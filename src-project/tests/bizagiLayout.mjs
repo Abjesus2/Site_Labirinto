@@ -1,4 +1,4 @@
-import { computeBizagiGeometry, computeBizagiLanes, stackSectorsIntoLanes, computeLanesFromGroups } from '../.tmp-bizagiLayout.mjs';
+import { computeBizagiGeometry, computeBizagiLanes, stackSectorsIntoLanes, computeLanesFromGroups, sectorKey } from '../.tmp-bizagiLayout.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -109,8 +109,9 @@ check('seta para forma inexistente é descartada', g2.edges.length === edges.len
   // Setores diferentes lado a lado na mesma altura: a faixa leva os dois nomes.
   const dept = new Map([['ini', 'A'], ['a', 'A'], ['b', 'A'], ['dec', 'A'], ['sim', 'B'], ['nao', 'C'], ['c', 'B'], ['fim', 'B']]);
   const lanes = computeBizagiLanes(g, dept);
-  // Só a função de faixas: o export troca esse caso por uma raia por setor
-  // (stackSectorsIntoLanes; ver o teste de quadros em grade em bizagiBpm.mjs).
+  // Só a função de faixas: com quadros de setores lado a lado o export troca
+  // esse caso por uma raia por setor (stackSectorsIntoLanes; ver o teste de
+  // quadros em grade em bizagiBpm.mjs).
   check('setores lado a lado na mesma altura dividem uma faixa com os dois nomes', lanes.some((l) => l.name === 'B / C' || l.name === 'C / B'), lanes.map((l) => l.name).join(' | '));
 }
 check('um setor só: sem raias', computeBizagiLanes(g, new Map([...g.nodes.keys()].map((id) => [id, 'Único']))).length === 0);
@@ -137,11 +138,82 @@ check('fluxo horizontal: sem raias (evita arquivo que o Bizagi não represente)'
   const st = stackSectorsIntoLanes(nodes, containers, edges);
   check('um grupo por setor, na ordem do fluxo', st.groups.map((g) => g.name).join() === 'A,B', st.groups.map((g) => g.name).join());
   check('forma sem setor vai para o setor da forma ligada mais próxima (antes no fluxo)', st.groups[0].nodeIds.includes('i') && st.groups[1].nodeIds.includes('solta'));
-  check('dois quadros do mesmo setor ficam lado a lado na mesma raia', st.groups[0].nodeIds.includes('a1') && st.groups[0].nodeIds.includes('a2') && st.boxes.get('a2').x > st.boxes.get('a1').x + 160 && st.boxes.get('a2').y === st.boxes.get('a1').y);
+  // Bloco = só o conteúdo do quadro (sem a área vazia); blocos da mesma raia
+  // alinhados pelo topo do conteúdo.
+  check('dois quadros do mesmo setor ficam lado a lado na mesma raia', st.groups[0].nodeIds.includes('a1') && st.groups[0].nodeIds.includes('a2') && st.boxes.get('a2').x > st.boxes.get('a1').x + 160 && st.boxes.get('a2').y === st.boxes.get('i').y);
   check('posição relativa dentro do quadro mantida', st.boxes.get('a1').x - st.boxes.get('i').x === -20 && st.boxes.get('a1').y - st.boxes.get('i').y === 80);
   check('raia seguinte começa abaixo da anterior', Math.min(...st.groups[1].nodeIds.map((id) => st.boxes.get(id).y)) > Math.max(...st.groups[0].nodeIds.map((id) => st.boxes.get(id).y + st.boxes.get(id).height)));
   const g = computeBizagiGeometry(nodes.map((n) => ({ id: n.id, type: n.id === 'i' ? 'start' : 'process', box: st.boxes.get(n.id) })), edges.map((e, k) => ({ id: 'z' + k, ...e })));
   const lanes = computeLanesFromGroups(g, st.groups);
   check('raias dos grupos: uma por setor, encostadas, cada forma dentro da sua', lanes.length === 2 && lanes[0].y2 === lanes[1].y1 && lanes.every((l) => l.sectors.length === 1 && l.nodeIds.every((id) => { const b = g.nodes.get(id).box; return b.y >= l.y1 && b.y + b.height <= l.y2; })));
 }
+
+// Achados da revisão do empilhamento por setor
+{
+  const box = (x, y, w = 160, h = 60) => ({ x, y, width: w, height: h });
+  const q = (id, label, x, y = -40, w = 300, h = 400) => ({ id, label, box: box(x, y, w, h) });
+  const top = (st, ids) => Math.min(...ids.map((id) => st.boxes.get(id).y));
+  const cxOf = (st, id) => st.boxes.get(id).x + st.boxes.get(id).width / 2;
+
+  // Nomes que só diferem em maiúsculas/espaços são o mesmo setor.
+  check('sectorKey ignora maiúsculas e espaços', sectorKey('  Logística   Reversa ') === sectorKey('logística reversa'));
+  const s1 = stackSectorsIntoLanes(
+    [{ id: 'v1', box: box(0, 0), sector: 'Vendas', holderId: 'qv' }, { id: 'e1', box: box(400, 0), sector: 'Estoque', holderId: 'qe' }, { id: 'v2', box: box(800, 0), sector: ' vendas ', holderId: 'qv2' }],
+    [q('qv', 'Vendas', -40), q('qe', 'Estoque', 360), q('qv2', ' vendas ', 760)],
+    [{ source: 'v1', target: 'e1' }, { source: 'e1', target: 'v2' }],
+  );
+  check('mesmo setor escrito diferente: uma raia só, com o primeiro nome', s1.groups.map((g) => g.name).join() === 'Vendas,Estoque', s1.groups.map((g) => g.name).join());
+
+  // Anotação ligada a uma forma (sem vir do início) não puxa o setor dela
+  // para o começo.
+  const s2 = stackSectorsIntoLanes(
+    [{ id: 's', type: 'start', box: box(0, 0, 30, 30), sector: 'A', holderId: 'qa' }, { id: 'a1', box: box(0, 100), sector: 'A', holderId: 'qa' },
+      { id: 'b1', box: box(400, 100), sector: 'B', holderId: 'qb' }, { id: 'c1', box: box(800, 100), sector: 'C', holderId: 'qc' }, { id: 'nota', type: 'note', box: box(800, 250), sector: 'C', holderId: 'qc' }],
+    [q('qa', 'A', -40), q('qb', 'B', 360), q('qc', 'C', 760)],
+    [{ source: 's', target: 'a1' }, { source: 'a1', target: 'b1' }, { source: 'b1', target: 'c1' }, { source: 'nota', target: 'c1' }],
+  );
+  check('anotação com seta não muda a ordem das raias', s2.groups.map((g) => g.name).join() === 'A,B,C', s2.groups.map((g) => g.name).join());
+
+  // Quadros em colunas com o fluxo DESCENDO dentro de cada um: as setas entre
+  // colunas não transformam o fluxo em "esquerda para a direita" (escada).
+  const colNodes = [];
+  const colEdges = [];
+  ['A', 'B', 'C'].forEach((k, i) => {
+    colNodes.push({ id: k + '1', box: box(i * 560 + 150, 160), sector: k, holderId: 'q' + k }, { id: k + '2', box: box(i * 560 + 150, 460), sector: k, holderId: 'q' + k });
+    colEdges.push({ source: k + '1', target: k + '2' });
+    if (i) colEdges.push({ source: ['A', 'B', 'C'][i - 1] + '2', target: k + '1' });
+  });
+  const s3 = stackSectorsIntoLanes(colNodes, ['A', 'B', 'C'].map((k, i) => q('q' + k, k, i * 560, 0, 520, 600)), colEdges, 'LR');
+  check('colunas com fluxo descendo: direção de cima para baixo', s3.direction === 'TB', s3.direction);
+  check('colunas com fluxo descendo: raias sem escada (mesma coluna)', cxOf(s3, 'A1') === cxOf(s3, 'B1') && cxOf(s3, 'B1') === cxOf(s3, 'C1'));
+
+  // Fluxo da esquerda para a direita dentro dos quadros: escada.
+  const s4 = stackSectorsIntoLanes(
+    [{ id: 'a1', box: box(0, 0), sector: 'A', holderId: 'qa' }, { id: 'a2', box: box(300, 0), sector: 'A', holderId: 'qa' },
+      { id: 'b1', box: box(0, 500), sector: 'B', holderId: 'qb' }, { id: 'b2', box: box(300, 500), sector: 'B', holderId: 'qb' }],
+    [q('qa', 'A', -40, -40, 600, 300), q('qb', 'B', -40, 460, 600, 300)],
+    [{ source: 'a1', target: 'a2' }, { source: 'a2', target: 'b1' }, { source: 'b1', target: 'b2' }],
+  );
+  check('fluxo esquerda→direita: direção LR e bloco seguinte começa depois do anterior', s4.direction === 'LR' && s4.boxes.get('b1').x > s4.boxes.get('a2').x + 160, s4.direction);
+
+  // Fim fora do quadro, um pouco abaixo, ligado a ele: continua embaixo.
+  const s5 = stackSectorsIntoLanes(
+    [{ id: 'a1', box: box(120, 100), sector: 'A', holderId: 'qa' }, { id: 'b1', box: box(570, 100), sector: 'B', holderId: 'qb' }, { id: 'b2', box: box(570, 300), sector: 'B', holderId: 'qb' },
+      { id: 'fim', type: 'end', box: box(610, 650, 60, 60), sector: '' }],
+    [q('qa', 'A', 0, 0, 400, 500), q('qb', 'B', 450, 0, 400, 500)],
+    [{ source: 'a1', target: 'b1' }, { source: 'b1', target: 'b2' }, { source: 'b2', target: 'fim' }],
+  );
+  check('fim solto ligado ao quadro: na raia do quadro e abaixo dele', s5.groups[1].nodeIds.includes('fim') && s5.boxes.get('fim').y > s5.boxes.get('b2').y + 60 && Math.abs(cxOf(s5, 'fim') - cxOf(s5, 'b2')) < 100);
+
+  // Nota solta (sem setor e sem seta) fica junto do quadro mais próximo, sem
+  // abrir raia nem esticar um bloco.
+  const s6 = stackSectorsIntoLanes(
+    [{ id: 'a1', box: box(0, 100), sector: 'A', holderId: 'qa' }, { id: 'b1', box: box(400, 100), sector: 'B', holderId: 'qb' }, { id: 'titulo', type: 'text', box: box(0, -150), sector: '' }],
+    [q('qa', 'A', -40), q('qb', 'B', 360)],
+    [{ source: 'a1', target: 'b1' }],
+  );
+  check('título solto acompanha o quadro mais próximo, sem raia própria', s6.groups.length === 2 && s6.groups[0].nodeIds.includes('titulo') && top(s6, ['titulo']) < top(s6, ['a1']));
+}
+
 console.log(R.join('\n'));
+process.exit(R.some((l) => l.startsWith('FALHA')) ? 1 : 0);

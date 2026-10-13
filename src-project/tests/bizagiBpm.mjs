@@ -1,5 +1,6 @@
 import { generateBizagiBpm } from '../.tmp-exportFormats.mjs';
 import JSZip from 'jszip';
+import { horizontalBandsTB } from '../.tmp-sectorContainers.mjs';
 
 const R = [];
 const check = (n, ok, extra = '') => R.push(`${ok ? 'OK  ' : 'FALHA'} | ${n}${extra ? ' -> ' + extra : ''}`);
@@ -261,4 +262,86 @@ check('o ponto de partida fica na borda direita do círculo, na altura do centro
   check('setores lado a lado em toda a altura: cada forma na raia do seu setor', ['i', 'v1', 'v2'].every((n) => laneOf(n) === 'Vendas') && ['e1', 'e2', 'f'].every((n) => laneOf(n) === 'Estoque'));
 }
 
+// Achados da revisão do "uma raia por setor" (exportação completa).
+{
+  const lerBpm = async (blob, titulo) => {
+    const z = await JSZip.loadAsync(Buffer.from(await blob.arrayBuffer()));
+    const d = await JSZip.loadAsync(await z.file(Object.keys(z.files).find((n) => n.endsWith('.diag'))).async('nodebuffer'));
+    const x = await d.file('Diagram.xml').async('string');
+    const pool = [...x.matchAll(/<Pool Id="([^"]+)" Name="([^"]*)"[^>]*>([\s\S]*?)<\/Pool>/g)].find((p) => p[2] === titulo);
+    const lanes = [...pool[3].matchAll(/<Lane Id="([^"]+)" Name="([^"]*)"[\s\S]*?Height="(\d+)" Width="(\d+)"[^>]*><Coordinates XCoordinate="(\d+)" YCoordinate="(\d+)"/g)].map((m) => ({ id: m[1], name: m[2], h: +m[3], y: +m[6] }));
+    const acts = new Map([...x.matchAll(/<Activity Id="([^"]+)" Name="([^"]*)">([\s\S]*?)<\/Activity>/g)].map((a) => {
+      const g = /(?:LaneId="([^"]+)" )?Height="(\d+)" Width="(\d+)"[^>]*><Coordinates XCoordinate="(-?\d+)" YCoordinate="(-?\d+)"/.exec(a[3]);
+      return [a[2], { id: a[1], lane: lanes.find((l) => l.id === g[1])?.name, h: +g[2], w: +g[3], x: +g[4], y: +g[5] }];
+    }));
+    const trans = [...x.matchAll(/<Transition Id="[^"]+" From="([^"]+)" To="([^"]+)"[^>]*>[\s\S]*?FromPort="(\d)" ToPort="(\d)"/g)].map((t) => ({ from: t[1], to: t[2], ports: t[3] + '>' + t[4] }));
+    return { lanes, acts, trans };
+  };
+  const F = (id, label, x, y, w, h, type = 'frame') => ({ id, type, position: { x, y }, style: { width: w, height: h }, data: { label } });
+  const N = (id, type, x, y, dept) => ({ id, type, position: { x, y }, data: { label: id, ...(dept ? { timing: { department: dept } } : {}) } });
+  const E = (pares) => pares.map(([a, b, l], i) => ({ id: 'r' + i, source: a, target: b, label: l, data: {} }));
+
+  // Raias horizontais montadas pelo próprio app (fluxo de cima para baixo):
+  // uma decisão abre ramos para dois setores na mesma altura. O Bizagi
+  // continua igual ao site — antes do ajuste tudo era reorganizado.
+  {
+    const base = [N('Inicio', 'start', 325, 0, 'Comercial'), N('Receber', 'process', 300, 120, 'Comercial'), N('Analisar', 'process', 300, 240, 'Financeiro'),
+      N('Ok?', 'decision', 295, 360, 'Financeiro'), N('Negociar', 'process', 120, 540, 'Comercial'), N('Liberar', 'process', 480, 540, 'Financeiro'),
+      N('Separar', 'process', 300, 680, 'Logística'), N('Expedir', 'process', 300, 800, 'Logística'), N('Fim', 'end', 325, 920, 'Logística')];
+    const nos = horizontalBandsTB(base);
+    const lig = E([['Inicio', 'Receber'], ['Receber', 'Analisar'], ['Analisar', 'Ok?'], ['Ok?', 'Negociar', 'Não'], ['Ok?', 'Liberar', 'Sim'], ['Negociar', 'Separar'], ['Liberar', 'Separar'], ['Separar', 'Expedir'], ['Expedir', 'Fim']]);
+    const r = await lerBpm(await generateBizagiBpm(nos, lig, 'Faixas'), 'Faixas');
+    const ordem = ['Inicio', 'Receber', 'Analisar', 'Ok?', 'Negociar', 'Separar', 'Expedir', 'Fim'].map((n) => r.acts.get(n).y);
+    check('raias horizontais do app: o Bizagi segue a mesma disposição do site (não reorganiza)', ordem.every((y, i) => i === 0 || y > ordem[i - 1]) && r.acts.get('Negociar').y === r.acts.get('Liberar').y && r.lanes.some((l) => l.name.includes(' / ')), r.lanes.map((l) => l.name).join(' | '));
+  }
+
+  // Quadros em colunas com o fluxo descendo em cada um: continua de cima
+  // para baixo no Bizagi (sem escada nem setas para o lado).
+  {
+    const setores = ['Solicitante', 'Compras', 'Fiscal'];
+    const nos = [];
+    const pares = [];
+    let ant = 'ini';
+    nos.push(N('ini', 'start', 180, 60));
+    setores.forEach((st, i) => {
+      nos.push(F('C' + i, st, i * 560, 0, 520, 700), N(st + ' 1', 'process', i * 560 + 150, 160), N(st + ' 2', 'process', i * 560 + 150, 460));
+      pares.push([ant, st + ' 1'], [st + ' 1', st + ' 2']);
+      ant = st + ' 2';
+    });
+    nos.push(N('fim', 'end', 2 * 560 + 180, 600));
+    pares.push([ant, 'fim']);
+    const r = await lerBpm(await generateBizagiBpm(nos, E(pares), 'Colunas'), 'Colunas');
+    check('quadros em colunas com fluxo descendo: uma raia por setor', r.lanes.map((l) => l.name).join() === setores.join(), r.lanes.map((l) => l.name).join());
+    check('quadros em colunas com fluxo descendo: toda seta sai por baixo e entra por cima', r.trans.every((t) => t.ports === '2>1'), r.trans.map((t) => t.ports).join(' '));
+    const xs = setores.map((st) => r.acts.get(st + ' 1').x);
+    check('quadros em colunas com fluxo descendo: raias sem escada', xs.every((x) => x === xs[0]), xs.join(','));
+  }
+
+  // Quadro SEM nome dentro de uma raia com nome: a forma fica no setor da raia.
+  {
+    const nos = [F('swA', 'A', 0, 0, 500, 700, 'swimlane'), F('swB', 'B', 550, 0, 500, 700, 'swimlane'), F('grp', '', 40, 250, 420, 300),
+      N('i', 'start', 710, 60), N('b1', 'process', 670, 160), N('a1', 'process', 170, 300), N('a2', 'process', 170, 440), N('b2', 'process', 670, 450), N('f', 'end', 710, 600)];
+    const r = await lerBpm(await generateBizagiBpm(nos, E([['i', 'b1'], ['b1', 'a1'], ['a1', 'a2'], ['a2', 'b2'], ['b2', 'f']]), 'Agrupador'), 'Agrupador');
+    check('quadro sem nome não apaga o setor da raia em volta', r.acts.get('a1').lane === 'A' && r.acts.get('a2').lane === 'A' && r.acts.get('b1').lane === 'B', r.lanes.map((l) => l.name).join());
+  }
+
+  // Mesmo setor escrito de jeitos diferentes: uma raia só.
+  {
+    const nos = [F('qv', 'Vendas', 0, 0, 400, 500), F('qe', 'Estoque', 450, 0, 400, 500),
+      N('i', 'start', 160, 60), N('v1', 'process', 120, 200, 'vendas '), N('v2', 'process', 120, 350, 'VENDAS'), N('e1', 'process', 570, 200), N('f', 'end', 610, 400)];
+    const r = await lerBpm(await generateBizagiBpm(nos, E([['i', 'v1'], ['v1', 'v2'], ['v2', 'e1'], ['e1', 'f']]), 'Nomes'), 'Nomes');
+    check('setor com maiúsculas/espaços diferentes: uma raia por setor', r.lanes.map((l) => l.name).join() === 'Vendas,Estoque', r.lanes.map((l) => l.name).join());
+  }
+
+  // Quadro "A" dentro da raia "A": o bloco é a raia inteira (a distância
+  // entre as formas não muda).
+  {
+    const nos = [F('swA', 'A', 0, 0, 1000, 600, 'swimlane'), F('fA', 'A', 500, 50, 450, 500), F('swB', 'B', 1050, 0, 500, 600, 'swimlane'),
+      N('i', 'start', 160, 60), N('a1', 'process', 120, 200), N('a2', 'process', 650, 200), N('b1', 'process', 1170, 200), N('f', 'end', 1210, 450)];
+    const r = await lerBpm(await generateBizagiBpm(nos, E([['i', 'a1'], ['a1', 'a2'], ['a2', 'b1'], ['b1', 'f']]), 'Aninhado'), 'Aninhado');
+    check('quadro dentro de raia do mesmo setor: formas mantêm a distância', r.acts.get('a2').x - r.acts.get('a1').x === 530 && r.acts.get('a2').y === r.acts.get('a1').y, String(r.acts.get('a2').x - r.acts.get('a1').x));
+  }
+}
+
 console.log(R.join('\n'));
+process.exit(R.some((l) => l.startsWith('FALHA')) ? 1 : 0);

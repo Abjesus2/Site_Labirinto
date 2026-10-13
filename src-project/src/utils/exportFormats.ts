@@ -11,7 +11,7 @@
  * outro formato permite representar.
  */
 import { getNodeDimensions } from '../components/CustomNodes';
-import { computeBizagiGeometry, computeBizagiLanes, computeLanesFromGroups, stackSectorsIntoLanes, BBox as BizagiGeomBox, BizagiKind } from './bizagiLayout';
+import { computeBizagiGeometry, computeBizagiLanes, computeLanesFromGroups, sectorKey, stackSectorsIntoLanes, BBox as BizagiGeomBox, BizagiKind } from './bizagiLayout';
 
 interface Point {
   x: number;
@@ -377,48 +377,78 @@ export async function generateBizagiBpm(nodes: any[], edges: any[], title: strin
   );
 
   // Raias: setor de cada forma (campo "department" da etapa ou a raia/
-  // quadro do site em que ela está) — ver computeBizagiLanes.
+  // quadro do site em que ela está) — ver computeBizagiLanes. Nomes que só
+  // diferem em maiúsculas ou espaços são o mesmo setor (fica o primeiro).
   const containers = nodes.filter((n) => n.type === 'swimlane' || n.type === 'frame');
+  const labeled = containers
+    .map((ct) => ({ ct, label: String(ct.data?.label || '').trim(), box: getNodeBox(ct) }))
+    .filter((c) => c.label);
+  const sectorName = new Map<string, string>();
+  const canonSector = (s: string) => {
+    const k = sectorKey(s);
+    if (!k) return '';
+    if (!sectorName.has(k)) sectorName.set(k, s.trim().replace(/\s+/g, ' '));
+    return sectorName.get(k)!;
+  };
   const deptById = new Map<string, string>();
   const holderById = new Map<string, string>();
   flowNodes.forEach((n) => {
     const b = getNodeBox(n);
     const c = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-    const holder = containers
-      .map((ct) => ({ ct, box: getNodeBox(ct) }))
+    // Quadros com nome em volta da forma, do menor para o maior (quadro sem
+    // nome não define setor).
+    const around = labeled
       .filter(({ box }) => c.x >= box.x && c.x <= box.x + box.width && c.y >= box.y && c.y <= box.y + box.height)
-      .sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
-    if (holder) holderById.set(n.id, holder.ct.id);
-    let dept = String(n.data?.timing?.department || '').trim();
-    if (!dept && holder) dept = String(holder.ct.data?.label || '').trim();
+      .sort((p, q) => p.box.width * p.box.height - q.box.width * q.box.height);
+    const dept = canonSector(String(n.data?.timing?.department || '').trim() || around[0]?.label || '');
     deptById.set(n.id, dept);
+    // Bloco movido inteiro: o MAIOR quadro do mesmo setor em volta da forma
+    // (um quadro "Compras" dentro de outro "Compras" não separa o bloco).
+    const key = sectorKey(dept);
+    const block = key ? [...around].reverse().find((p) => sectorKey(p.label) === key) : undefined;
+    if (block) holderById.set(n.id, block.ct.id);
   });
   let lanes = computeBizagiLanes(geom, deptById);
 
-  // Setores lado a lado no site (quadros/raias em colunas ou em grade): as
-  // faixas por altura juntariam setores diferentes numa raia só ("A / B") e
-  // as formas cairiam na raia de outro setor. Nesse caso cada setor ganha a
-  // sua raia: os quadros são movidos inteiros para a raia do seu setor e as
-  // setas são recalculadas — ver stackSectorsIntoLanes.
-  // Também quando TODOS ficam lado a lado (a faixa única juntada some e o
-  // arquivo sairia sem raia nenhuma) e no fluxo da esquerda para a direita.
+  // Setores lado a lado no site (quadros/raias de setores diferentes em
+  // colunas ou em grade): as faixas por altura juntariam setores diferentes
+  // numa raia só ("A / B") e as formas cairiam na raia de outro setor. Nesse
+  // caso cada setor ganha a sua raia: os quadros são movidos inteiros para a
+  // raia do seu setor e as setas são recalculadas — ver stackSectorsIntoLanes.
+  // Também quando nenhuma faixa sobra com 2+ setores (todos lado a lado: o
+  // arquivo sairia sem raia nenhuma). Raias horizontais do site, mesmo com
+  // uma decisão abrindo ramos para dois setores, continuam como estão.
+  // Mesma rotação das formas (raias verticais do site), agora para as caixas
+  // das raias/quadros: o centro troca x↔y e a caixa gira junto.
+  const containerBox = (ct: any) => {
+    const b = getNodeBox(ct);
+    return verticalLanes ? { x: b.y, y: b.x, width: b.height, height: b.width } : b;
+  };
+  const blockContainers = containers.filter((ct) => [...holderById.values()].includes(ct.id));
+  const sideBySide = blockContainers.some((ca, i) =>
+    blockContainers.slice(i + 1).some((cb) => {
+      if (sectorKey(String(ca.data?.label || '')) === sectorKey(String(cb.data?.label || ''))) return false;
+      const a = containerBox(ca);
+      const b = containerBox(cb);
+      const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+      const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+      return overlapY >= 0.3 * Math.min(a.height, b.height) && overlapX < 0.1 * Math.min(a.width, b.width);
+    }),
+  );
   const distinctSectors = new Set([...deptById.values()].filter(Boolean));
-  const bandsOk = lanes.length >= 2 && lanes.every((ln) => ln.sectors.length === 1);
-  if (distinctSectors.size >= 2 && !bandsOk) {
-    // Mesma rotação das formas (raias verticais do site), agora para as caixas
-    // das raias/quadros: o centro troca x↔y e a caixa gira junto.
-    const containerBox = (ct: any) => {
-      const b = getNodeBox(ct);
-      return verticalLanes ? { x: b.y, y: b.x, width: b.height, height: b.width } : b;
-    };
+  if (distinctSectors.size >= 2 && (sideBySide || lanes.length === 0)) {
     const stack = stackSectorsIntoLanes(
-      flowNodes.map((n) => ({ id: n.id, box: geomBox(n), sector: deptById.get(n.id) || '', holderId: holderById.get(n.id) })),
+      flowNodes.map((n) => ({ id: n.id, type: n.type, box: geomBox(n), sector: deptById.get(n.id) || '', holderId: holderById.get(n.id) })),
       containers.map((ct) => ({ id: ct.id, label: String(ct.data?.label || ''), box: containerBox(ct) })),
       edgesIn,
+      geom.direction,
     );
+    // Direção decidida pelas setas dentro dos quadros: empilhar as raias não
+    // pode virar um fluxo de cima para baixo em um da esquerda para a direita.
     geom = computeBizagiGeometry(
       flowNodes.map((n) => ({ id: n.id, type: n.type, box: stack.boxes.get(n.id)! })),
       edgesIn,
+      stack.direction,
     );
     lanes = computeLanesFromGroups(geom, stack.groups);
   }
